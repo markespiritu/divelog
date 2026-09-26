@@ -520,84 +520,97 @@
     });
 
     const xDomain = [samples[0].t, samples[samples.length - 1].t];
-    const width = Math.min(1048, stackEl.clientWidth || root.clientWidth || 1048);
 
-    // Depth panel with deco-ceiling band
-    const depthMax = Math.max(...samples.map((s) => s.depth || 0)) * 1.08;
-    drawPanel({
-      title: "Depth",
-      height: 220,
-      width,
-      xDomain,
-      yDomain: [0, depthMax],
-      invertY: true,
-      yFmt: (v) => v + "m",
-      bands: [{
-        points: samples.map((s) => ({ t: s.t, v: s.firstStopDepth || 0 })),
-        base: 0,
-        color: "var(--status-critical)",
-        opacity: 0.16,
-      }],
-      series: [{
-        name: "Depth", color: "var(--series-1)",
-        points: samples.map((s) => ({ t: s.t, v: s.depth })),
-      }],
-    });
+    function renderCharts() {
+      stackEl.innerHTML = "";
+      panels.length = 0;
+      const width = Math.min(1048, stackEl.clientWidth || root.clientWidth || 1048);
 
-    // PPO2 panel
-    drawPanel({
-      title: "PPO2",
-      height: 130,
-      width,
-      xDomain,
-      yDomain: [0, 1.8],
-      yFmt: (v) => v.toFixed(1),
-      series: [{
-        name: "PPO2", color: "var(--series-1)",
-        points: samples.map((s) => ({ t: s.t, v: s.ppo2 })),
-      }],
-    });
+      // Depth panel with deco-ceiling band
+      const depthMax = Math.max(...samples.map((s) => s.depth || 0)) * 1.08;
+      drawPanel({
+        title: "Depth",
+        height: 264,
+        width,
+        xDomain,
+        yDomain: [0, depthMax],
+        invertY: true,
+        yFmt: (v) => v + "m",
+        bands: [{
+          points: samples.map((s) => ({ t: s.t, v: s.firstStopDepth || 0 })),
+          base: 0,
+          color: "var(--status-critical)",
+          opacity: 0.16,
+        }],
+        series: [{
+          name: "Depth", color: "var(--series-1)",
+          points: samples.map((s) => ({ t: s.t, v: s.depth })),
+        }],
+      });
 
-    // Tank pressure panel (only tanks that have any data)
-    const tankSeries = [];
-    const tankColors = ["var(--series-1)", "var(--series-2)", "var(--series-3)", "var(--series-4)"];
-    for (let i = 0; i < 4; i++) {
-      if (samples.some((s) => s.tankPressureBar[i] !== null)) {
-        tankSeries.push({
-          name: `Tank ${i + 1}`, color: tankColors[i],
-          points: samples.map((s) => ({ t: s.t, v: s.tankPressureBar[i] })),
-        });
+      // Tank pressure panel (only tanks that have any data)
+      const tankSeries = [];
+      const tankColors = ["var(--series-1)", "var(--series-2)", "var(--series-3)", "var(--series-4)"];
+      for (let i = 0; i < 4; i++) {
+        if (samples.some((s) => s.tankPressureBar[i] !== null)) {
+          tankSeries.push({
+            name: `Tank ${i + 1}`, color: tankColors[i],
+            points: samples.map((s) => ({ t: s.t, v: s.tankPressureBar[i] })),
+          });
+        }
       }
+      const tankMax = Math.max(...samples.flatMap((s) => s.tankPressureBar.filter((v) => v !== null))) * 1.05;
+      drawPanel({
+        title: "Tank pressure",
+        legendItems: tankSeries.map((s) => ({ name: s.name, color: s.color })),
+        height: 180,
+        width,
+        xDomain,
+        yDomain: [0, tankMax],
+        yFmt: (v) => Math.round(v) + " bar",
+        series: tankSeries,
+      });
+
+      // PPO2 panel
+      drawPanel({
+        title: "PPO2",
+        height: 156,
+        width,
+        xDomain,
+        yDomain: [0, 1.8],
+        yFmt: (v) => v.toFixed(1),
+        series: [{
+          name: "PPO2", color: "var(--series-1)",
+          points: samples.map((s) => ({ t: s.t, v: s.ppo2 })),
+        }],
+      });
+
+      // Water temp panel
+      drawPanel({
+        title: "Water temperature",
+        height: 156,
+        width,
+        xDomain,
+        yDomain: [Math.min(...temps) - 1, Math.max(...temps) + 1],
+        yFmt: (v) => v.toFixed(0) + "°",
+        series: [{
+          name: "Temp", color: "var(--series-2)",
+          points: samples.map((s) => ({ t: s.t, v: s.waterTempC })),
+        }],
+      });
+
+      drawXAxis(width, xDomain);
+      setupCrosshair(samples, width, xDomain);
     }
-    const tankMax = Math.max(...samples.flatMap((s) => s.tankPressureBar.filter((v) => v !== null))) * 1.05;
-    drawPanel({
-      title: "Tank pressure",
-      legendItems: tankSeries.map((s) => ({ name: s.name, color: s.color })),
-      height: 150,
-      width,
-      xDomain,
-      yDomain: [0, tankMax],
-      yFmt: (v) => Math.round(v) + " bar",
-      series: tankSeries,
-    });
 
-    // Water temp panel
-    drawPanel({
-      title: "Water temperature",
-      height: 130,
-      width,
-      xDomain,
-      yDomain: [Math.min(...temps) - 1, Math.max(...temps) + 1],
-      yFmt: (v) => v.toFixed(0) + "°",
-      series: [{
-        name: "Temp", color: "var(--series-2)",
-        points: samples.map((s) => ({ t: s.t, v: s.waterTempC })),
-      }],
-    });
-
-    drawXAxis(width, xDomain);
-    setupCrosshair(samples, width, xDomain);
+    renderCharts();
     buildTable(samples);
+
+    let resizeTimer = null;
+    window.addEventListener("resize", () => {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(renderCharts, 120);
+    });
 
     document.getElementById("table-toggle").addEventListener("click", () => {
       const wrap = document.getElementById("table-wrap");
