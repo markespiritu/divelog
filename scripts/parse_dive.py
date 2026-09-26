@@ -30,6 +30,13 @@ def num_or_none(value):
         return None  # placeholder strings like "No comms for 90s +"
 
 
+PSI_PER_BAR = 14.5037738
+
+def psi_to_bar(value):
+    value = num_or_none(value)
+    return None if value is None else round(value / PSI_PER_BAR, 1)
+
+
 def bool_or_none(value):
     if value is None or value.strip() == "":
         return None
@@ -91,11 +98,11 @@ def parse_csv(csv_path: Path):
                 "waterTempC": num_or_none(rec.get("Water Temp")),
                 "gasSwitchNeeded": bool_or_none(rec.get("Gas Switch Needed")),
                 "batteryVoltage": num_or_none(rec.get("Battery Voltage")),
-                "tankPressurePsi": [
-                    num_or_none(rec.get("Tank 1 pressure (PSI)")),
-                    num_or_none(rec.get("Tank 2 pressure (PSI)")),
-                    num_or_none(rec.get("Tank 3 pressure (PSI)")),
-                    num_or_none(rec.get("Tank 4 pressure (PSI)")),
+                "tankPressureBar": [
+                    psi_to_bar(rec.get("Tank 1 pressure (PSI)")),
+                    psi_to_bar(rec.get("Tank 2 pressure (PSI)")),
+                    psi_to_bar(rec.get("Tank 3 pressure (PSI)")),
+                    psi_to_bar(rec.get("Tank 4 pressure (PSI)")),
                 ],
                 "sacRate": num_or_none(rec.get("SAC Rate (2 minute avg)")),
                 "ascentRate": num_or_none(rec.get("Ascent Rate")),
