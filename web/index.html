@@ -93,10 +93,14 @@
     background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
     padding: 14px 16px 8px; margin-bottom: 12px;
   }
-  .panel-title { font-size: 13px; color: var(--text-secondary); margin-bottom: 2px; display:flex; justify-content:space-between; align-items:center;}
+  .panel-title { position: relative; z-index: 2; font-size: 13px; color: var(--text-secondary); margin-bottom: 2px; display:flex; justify-content:space-between; align-items:center;}
+  .panel-controls { display: flex; align-items: center; gap: 14px; }
   .legend { display: flex; gap: 14px; font-size: 12px; color: var(--text-secondary); }
   .legend .key { display: inline-flex; align-items: center; gap: 5px; }
   .legend .swatch { width: 14px; height: 2px; border-radius: 2px; display:inline-block; }
+  .panel-toggle { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-secondary); cursor: pointer; user-select: none; }
+  .panel-toggle input { cursor: pointer; }
+  .gas-switch-tag { fill: var(--text-secondary); font-size: 9px; }
 
   svg { display: block; overflow: visible; }
   .gridline { stroke: var(--gridline); stroke-width: 1; }
@@ -199,10 +203,85 @@
     return ticks;
   }
 
+  // Detect gas switches from tank pressure trends: at any point in time the
+  // diver breathes from exactly one tank, so that tank's pressure drops
+  // steadily while the others sit flat (aside from sensor noise). We scan a
+  // rolling window per tank looking for a sustained, consistent drop, pick
+  // whichever tank has the strongest such drop at each sample, and emit an
+  // event wherever that "active tank" changes.
+  function detectGasSwitches(samples) {
+    const WINDOW = 6;             // ~12s at 2s sampling — long enough to separate a real draw from noise
+    const NOISE_TOLERANCE = 0.3;  // bar; small upward blips within this are sensor noise, not a refill
+    const MIN_DROP = 1.0;         // bar over the window; minimum drop to count as "in use"
+    const MIN_RUN = 6;            // minimum consecutive samples agreeing on the active tank
+
+    const n = samples.length;
+    const tankCount = samples[0].tankPressureBar.length;
+    const pressure = Array.from({ length: tankCount }, (_, i) => samples.map((s) => s.tankPressureBar[i]));
+
+    const dropping = Array.from({ length: tankCount }, () => new Array(n).fill(false));
+    const windowDrop = Array.from({ length: tankCount }, () => new Array(n).fill(0));
+
+    for (let tank = 0; tank < tankCount; tank++) {
+      const p = pressure[tank];
+      for (let j = 0; j + WINDOW < n; j++) {
+        let consistent = true;
+        for (let k = j; k < j + WINDOW; k++) {
+          const a = p[k], b = p[k + 1];
+          if (a === null || b === null || b - a > NOISE_TOLERANCE) { consistent = false; break; }
+        }
+        if (!consistent) continue;
+        const drop = p[j] - p[j + WINDOW];
+        windowDrop[tank][j] = drop;
+        dropping[tank][j] = drop >= MIN_DROP;
+      }
+    }
+
+    // Pick the tank with the strongest consistent drop at each sample index.
+    const rawBest = new Array(n).fill(-1);
+    for (let j = 0; j < n; j++) {
+      let best = -1, bestDrop = 0;
+      for (let tank = 0; tank < tankCount; tank++) {
+        if (dropping[tank][j] && windowDrop[tank][j] > bestDrop) { best = tank; bestDrop = windowDrop[tank][j]; }
+      }
+      rawBest[j] = best;
+    }
+
+    // Collapse into runs of "which tank is active", ignoring indices with no clear answer.
+    const runs = [];
+    for (let j = 0; j < n; j++) {
+      if (rawBest[j] === -1) continue;
+      const last = runs[runs.length - 1];
+      if (last && last.tank === rawBest[j]) { last.end = j; last.len++; }
+      else runs.push({ tank: rawBest[j], start: j, end: j, len: 1 });
+    }
+
+    // Discard short runs (noise blips) by folding them into the previous run.
+    const filtered = [];
+    runs.forEach((r) => {
+      if (r.len < MIN_RUN && filtered.length) filtered[filtered.length - 1].end = r.end;
+      else filtered.push({ ...r });
+    });
+    // Re-merge any adjacent runs that ended up sharing the same tank.
+    const merged = [];
+    filtered.forEach((r) => {
+      const last = merged[merged.length - 1];
+      if (last && last.tank === r.tank) last.end = r.end;
+      else merged.push(r);
+    });
+
+    const events = [];
+    for (let i = 1; i < merged.length; i++) {
+      const index = merged[i].start;
+      events.push({ t: samples[index].t, index, fromTank: merged[i - 1].tank + 1, toTank: merged[i].tank + 1 });
+    }
+    return events;
+  }
+
   // Panel registry so the shared crosshair can update every chart at once.
   const panels = [];
 
-  function drawPanel({ title, legendItems, height, width, xDomain, series, yDomain, yFmt, invertY, bands }) {
+  function drawPanel({ title, legendItems, height, width, xDomain, series, yDomain, yFmt, invertY, bands, markers, toggle }) {
     const w = width, h = height;
     const innerW = w - MARGIN.left - MARGIN.right;
     const innerH = h - MARGIN.top - MARGIN.bottom;
@@ -215,22 +294,40 @@
     const titleSpan = document.createElement("span");
     titleSpan.textContent = title;
     titleRow.appendChild(titleSpan);
-    if (legendItems && legendItems.length > 1) {
-      const legend = document.createElement("div");
-      legend.className = "legend";
-      legendItems.forEach((li) => {
-        const key = document.createElement("span");
-        key.className = "key";
-        const sw = document.createElement("span");
-        sw.className = "swatch";
-        sw.style.background = li.color;
-        const label = document.createElement("span");
-        label.textContent = li.name;
-        key.appendChild(sw);
-        key.appendChild(label);
-        legend.appendChild(key);
-      });
-      titleRow.appendChild(legend);
+    if ((legendItems && legendItems.length > 1) || toggle) {
+      const controls = document.createElement("div");
+      controls.className = "panel-controls";
+      if (legendItems && legendItems.length > 1) {
+        const legend = document.createElement("div");
+        legend.className = "legend";
+        legendItems.forEach((li) => {
+          const key = document.createElement("span");
+          key.className = "key";
+          const sw = document.createElement("span");
+          sw.className = "swatch";
+          sw.style.background = li.color;
+          const label = document.createElement("span");
+          label.textContent = li.name;
+          key.appendChild(sw);
+          key.appendChild(label);
+          legend.appendChild(key);
+        });
+        controls.appendChild(legend);
+      }
+      if (toggle) {
+        const toggleLabel = document.createElement("label");
+        toggleLabel.className = "panel-toggle";
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = toggle.checked;
+        checkbox.addEventListener("change", () => toggle.onChange(checkbox.checked));
+        const text = document.createElement("span");
+        text.textContent = toggle.label;
+        toggleLabel.appendChild(checkbox);
+        toggleLabel.appendChild(text);
+        controls.appendChild(toggleLabel);
+      }
+      titleRow.appendChild(controls);
     }
     panelDiv.appendChild(titleRow);
 
@@ -281,6 +378,19 @@
       }));
     });
 
+    // gas switch markers (or similar point-in-time indicators)
+    (markers || []).forEach((m) => {
+      const x = xScale(m.t);
+      svg.appendChild(svgEl("line", {
+        x1: x, x2: x, y1: MARGIN.top, y2: MARGIN.top + innerH,
+        stroke: "var(--text-secondary)", "stroke-width": 1, "stroke-dasharray": "3 3", opacity: 0.6,
+      }));
+      svg.appendChild(svgEl("path", {
+        d: `M${x - 4},${MARGIN.top} L${x + 4},${MARGIN.top} L${x},${MARGIN.top + 7} Z`,
+        fill: "var(--text-secondary)", opacity: 0.85,
+      }));
+    });
+
     // x-axis ticks only on the last panel
     if (invertY === undefined || true) {
       // handled by caller via `showXAxis`
@@ -304,7 +414,7 @@
       return c;
     });
 
-    panels.push({ xScale, yScale, crosshair, dots, series, innerW, w });
+    panels.push({ xScale, yScale, crosshair, dots, series, innerW, w, svg });
 
     return panelDiv;
   }
@@ -329,18 +439,30 @@
     stackEl.appendChild(wrap);
   }
 
-  function setupCrosshair(samples, width, xDomain) {
+  function setupCrosshair(samples, width, xDomain, gasSwitchEvents) {
     stackEl.style.position = "relative";
     const overlay = svgEl("svg", { width, height: 2, style: "position:absolute; top:0; left:0; pointer-events:none;" });
     // Use a transparent full-height div for pointer capture instead of svg overlay,
     // since panels have varying heights.
+    // Position/size the capture area from the first panel's actual rendered
+    // box rather than its nominal SVG width — the panel's own CSS padding
+    // makes the SVG (preserveAspectRatio="none") render a bit narrower than
+    // its viewBox, so trusting the nominal width here drifts the mouse-to-time
+    // mapping away from where the chart is actually drawn.
+    const p0Rect = panels[0].svg.getBoundingClientRect();
+    const stackRect = stackEl.getBoundingClientRect();
+    const scaleX = p0Rect.width / panels[0].w;
+    const plotLeft = p0Rect.left - stackRect.left + MARGIN.left * scaleX;
+    const plotWidth = panels[0].innerW * scaleX;
+
     const capture = document.createElement("div");
     capture.style.position = "absolute";
     capture.style.top = "0";
-    capture.style.left = MARGIN.left + "px";
-    capture.style.width = (panels[0].innerW) + "px";
+    capture.style.left = plotLeft + "px";
+    capture.style.width = plotWidth + "px";
     capture.style.height = stackEl.scrollHeight + "px";
     capture.style.cursor = "crosshair";
+    capture.style.zIndex = "1";
     stackEl.style.position = "relative";
     stackEl.appendChild(capture);
 
@@ -357,8 +479,8 @@
 
     function move(evt) {
       const rect = capture.getBoundingClientRect();
-      const px = evt.clientX - rect.left + MARGIN.left;
-      const t = (px - MARGIN.left) / panels[0].innerW * (xDomain[1] - xDomain[0]) + xDomain[0];
+      const frac = (evt.clientX - rect.left) / rect.width;
+      const t = frac * (xDomain[1] - xDomain[0]) + xDomain[0];
       const idx = Math.max(0, Math.min(samples.length - 1, nearestIndex(t)));
       const s = samples[idx];
       const x = xScale(s.t);
@@ -412,6 +534,19 @@
         row.appendChild(nameSpan);
         tooltip.appendChild(row);
       });
+
+      const nearestSwitch = (gasSwitchEvents || [])
+        .map((e) => ({ e, dist: Math.abs(e.index - idx) }))
+        .sort((a, b) => a.dist - b.dist)[0];
+      if (nearestSwitch && nearestSwitch.dist <= 3) {
+        const row = document.createElement("div");
+        row.className = "t-row";
+        const valSpan = document.createElement("span");
+        valSpan.className = "t-val";
+        valSpan.textContent = `Gas switch: T${nearestSwitch.e.fromTank} to T${nearestSwitch.e.toTank}`;
+        row.appendChild(valSpan);
+        tooltip.appendChild(row);
+      }
 
       const stackRect = stackEl.getBoundingClientRect();
       let left = x + 12;
@@ -520,6 +655,8 @@
     });
 
     const xDomain = [samples[0].t, samples[samples.length - 1].t];
+    const gasSwitchEvents = detectGasSwitches(samples);
+    let showGasSwitches = true;
 
     function renderCharts() {
       stackEl.innerHTML = "";
@@ -569,6 +706,12 @@
         yDomain: [0, tankMax],
         yFmt: (v) => Math.round(v) + " bar",
         series: tankSeries,
+        markers: showGasSwitches ? gasSwitchEvents : [],
+        toggle: {
+          label: "Show gas switches",
+          checked: showGasSwitches,
+          onChange: (checked) => { showGasSwitches = checked; renderCharts(); },
+        },
       });
 
       // PPO2 panel
@@ -600,7 +743,7 @@
       });
 
       drawXAxis(width, xDomain);
-      setupCrosshair(samples, width, xDomain);
+      setupCrosshair(samples, width, xDomain, showGasSwitches ? gasSwitchEvents : []);
     }
 
     renderCharts();
