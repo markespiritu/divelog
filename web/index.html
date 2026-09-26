@@ -391,6 +391,8 @@
         ["Temp", s.waterTempC, "°C", "var(--series-2)"],
         ["Tank 1", s.tankPressurePsi[0], "psi", "var(--series-1)"],
         ["Tank 2", s.tankPressurePsi[1], "psi", "var(--series-2)"],
+        ["Tank 3", s.tankPressurePsi[2], "psi", "var(--series-3)"],
+        ["Tank 4", s.tankPressurePsi[3], "psi", "var(--series-4)"],
       ];
       rowsData.forEach(([name, val, unit, color]) => {
         if (val === null || val === undefined) return;
