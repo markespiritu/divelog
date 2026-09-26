@@ -1,0 +1,612 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Perdix — Dive Log</title>
+<style>
+  .viz-root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --page-plane:     #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --baseline:       #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --series-1:       #2a78d6; /* blue   */
+    --series-2:       #eb6834; /* orange */
+    --series-3:       #1baf7a; /* aqua   */
+    --series-4:       #eda100; /* yellow */
+    --status-critical:#d03b3b;
+    --status-good:    #0ca30c;
+    --seq-100:        #cde2fb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --surface-1:      #1a1a19;
+      --page-plane:     #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --gridline:       #2c2c2a;
+      --baseline:       #383835;
+      --border:         rgba(255,255,255,0.10);
+      --series-1:       #3987e5;
+      --series-2:       #d95926;
+      --series-3:       #199e70;
+      --series-4:       #c98500;
+      --status-critical:#e66767;
+      --status-good:    #0ca30c;
+      --seq-100:        #184f95;
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --page-plane:     #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --gridline:       #2c2c2a;
+    --baseline:       #383835;
+    --border:         rgba(255,255,255,0.10);
+    --series-1:       #3987e5;
+    --series-2:       #d95926;
+    --series-3:       #199e70;
+    --series-4:       #c98500;
+    --status-critical:#e66767;
+    --status-good:    #0ca30c;
+    --seq-100:        #184f95;
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    background: var(--page-plane);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    color: var(--text-primary);
+  }
+  .viz-root { padding: 24px; max-width: 1080px; margin: 0 auto; }
+
+  .header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+  .header h1 { font-size: 22px; margin: 0 0 4px; }
+  .header .sub { color: var(--text-secondary); font-size: 14px; }
+  .theme-toggle {
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-secondary);
+    border-radius: 8px; padding: 6px 12px; font-size: 13px; cursor: pointer;
+  }
+
+  .stats {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 1px; background: var(--gridline); border: 1px solid var(--border);
+    border-radius: 10px; overflow: hidden; margin-bottom: 20px;
+  }
+  .stat { background: var(--surface-1); padding: 12px 14px; }
+  .stat .label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin-bottom: 4px; }
+  .stat .value { font-size: 18px; font-variant-numeric: tabular-nums; }
+  .stat .value .unit { font-size: 12px; color: var(--text-secondary); font-weight: normal; margin-left: 2px; }
+
+  .panel {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px 8px; margin-bottom: 12px;
+  }
+  .panel-title { font-size: 13px; color: var(--text-secondary); margin-bottom: 2px; display:flex; justify-content:space-between; align-items:center;}
+  .legend { display: flex; gap: 14px; font-size: 12px; color: var(--text-secondary); }
+  .legend .key { display: inline-flex; align-items: center; gap: 5px; }
+  .legend .swatch { width: 14px; height: 2px; border-radius: 2px; display:inline-block; }
+
+  svg { display: block; overflow: visible; }
+  .gridline { stroke: var(--gridline); stroke-width: 1; }
+  .baseline { stroke: var(--baseline); stroke-width: 1; }
+  .axis-label { fill: var(--text-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+  .crosshair { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 2 2; pointer-events: none; }
+
+  #chart-stack { position: relative; }
+  #tooltip {
+    position: absolute; pointer-events: none; background: var(--surface-1);
+    border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+    font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.15); white-space: nowrap;
+    opacity: 0; transition: opacity 80ms; z-index: 10;
+  }
+  #tooltip .t-time { color: var(--text-secondary); margin-bottom: 4px; }
+  #tooltip .t-row { display:flex; gap: 8px; align-items:center; }
+  #tooltip .t-key { width: 10px; height: 2px; border-radius: 2px; }
+  #tooltip .t-val { font-weight: 600; font-variant-numeric: tabular-nums; }
+  #tooltip .t-name { color: var(--text-secondary); }
+
+  .table-toggle {
+    background: none; border: 1px solid var(--border); color: var(--text-secondary);
+    border-radius: 8px; padding: 6px 12px; font-size: 13px; cursor: pointer; margin: 8px 0 16px;
+  }
+  #table-wrap { display: none; max-height: 360px; overflow: auto; border: 1px solid var(--border); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; font-variant-numeric: tabular-nums; }
+  th, td { padding: 6px 10px; text-align: right; border-bottom: 1px solid var(--gridline); white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { position: sticky; top: 0; background: var(--surface-1); color: var(--text-secondary); font-weight: 600; }
+
+  #status { color: var(--text-secondary); font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="viz-root" id="root">
+  <div class="header">
+    <div>
+      <h1 id="dive-title">Loading dive…</h1>
+      <div class="sub" id="dive-sub"></div>
+    </div>
+    <button class="theme-toggle" id="theme-toggle" type="button">Toggle theme</button>
+  </div>
+
+  <div id="status"></div>
+  <div class="stats" id="stats"></div>
+  <div id="chart-stack"></div>
+  <button class="table-toggle" id="table-toggle" type="button">Show data table</button>
+  <div id="table-wrap"><table id="table"></table></div>
+  <div id="tooltip"></div>
+</div>
+
+<script>
+(function () {
+  const root = document.getElementById("root");
+  const themeBtn = document.getElementById("theme-toggle");
+  themeBtn.addEventListener("click", () => {
+    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    const cur = document.documentElement.getAttribute("data-theme") || (prefersDark ? "dark" : "light");
+    document.documentElement.setAttribute("data-theme", cur === "dark" ? "light" : "dark");
+  });
+
+  const statusEl = document.getElementById("status");
+  const tooltip = document.getElementById("tooltip");
+  const stackEl = document.getElementById("chart-stack");
+
+  const MARGIN = { top: 8, right: 16, bottom: 20, left: 44 };
+
+  function svgEl(tag, attrs) {
+    const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (const k in attrs) el.setAttribute(k, attrs[k]);
+    return el;
+  }
+
+  function fmtTime(sec) {
+    sec = Math.round(sec);
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return m + ":" + String(s).padStart(2, "0");
+  }
+
+  // ---- scale helpers ----
+  function makeScale(domain, range) {
+    const [d0, d1] = domain, [r0, r1] = range;
+    return (v) => r0 + ((v - d0) / (d1 - d0 || 1)) * (r1 - r0);
+  }
+
+  function niceTicks(min, max, count) {
+    const span = max - min || 1;
+    const rawStep = span / count;
+    const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+    const norm = rawStep / mag;
+    let step;
+    if (norm < 1.5) step = 1 * mag;
+    else if (norm < 3) step = 2 * mag;
+    else if (norm < 7) step = 5 * mag;
+    else step = 10 * mag;
+    const start = Math.ceil(min / step) * step;
+    const ticks = [];
+    for (let v = start; v <= max + 1e-9; v += step) ticks.push(Math.round(v * 1000) / 1000);
+    return ticks;
+  }
+
+  // Panel registry so the shared crosshair can update every chart at once.
+  const panels = [];
+
+  function drawPanel({ title, legendItems, height, width, xDomain, series, yDomain, yFmt, invertY, bands }) {
+    const w = width, h = height;
+    const innerW = w - MARGIN.left - MARGIN.right;
+    const innerH = h - MARGIN.top - MARGIN.bottom;
+
+    const panelDiv = document.createElement("div");
+    panelDiv.className = "panel";
+
+    const titleRow = document.createElement("div");
+    titleRow.className = "panel-title";
+    const titleSpan = document.createElement("span");
+    titleSpan.textContent = title;
+    titleRow.appendChild(titleSpan);
+    if (legendItems && legendItems.length > 1) {
+      const legend = document.createElement("div");
+      legend.className = "legend";
+      legendItems.forEach((li) => {
+        const key = document.createElement("span");
+        key.className = "key";
+        const sw = document.createElement("span");
+        sw.className = "swatch";
+        sw.style.background = li.color;
+        const label = document.createElement("span");
+        label.textContent = li.name;
+        key.appendChild(sw);
+        key.appendChild(label);
+        legend.appendChild(key);
+      });
+      titleRow.appendChild(legend);
+    }
+    panelDiv.appendChild(titleRow);
+
+    const svg = svgEl("svg", {
+      viewBox: `0 0 ${w} ${h}`, preserveAspectRatio: "none",
+      style: `width:100%; height:${h}px; display:block;`,
+    });
+    panelDiv.appendChild(svg);
+    stackEl.appendChild(panelDiv);
+
+    const xScale = makeScale(xDomain, [MARGIN.left, MARGIN.left + innerW]);
+    const yRange = invertY ? [MARGIN.top, MARGIN.top + innerH] : [MARGIN.top + innerH, MARGIN.top];
+    const yScale = makeScale(yDomain, yRange);
+
+    // gridlines (y)
+    const yTicks = niceTicks(yDomain[0], yDomain[1], 4);
+    yTicks.forEach((tv) => {
+      const y = yScale(tv);
+      svg.appendChild(svgEl("line", { x1: MARGIN.left, x2: w - MARGIN.right, y1: y, y2: y, class: "gridline" }));
+      const label = svgEl("text", { x: MARGIN.left - 8, y: y + 3, class: "axis-label", "text-anchor": "end" });
+      label.textContent = yFmt ? yFmt(tv) : tv;
+      svg.appendChild(label);
+    });
+
+    // shaded bands (e.g. deco ceiling zone)
+    (bands || []).forEach((b) => {
+      const path = b.points.map((p, i) => `${i === 0 ? "M" : "L"}${xScale(p.t)},${yScale(p.v)}`).join(" ");
+      const baseY = yScale(b.base);
+      const first = b.points[0], last = b.points[b.points.length - 1];
+      const d = `${path} L${xScale(last.t)},${baseY} L${xScale(first.t)},${baseY} Z`;
+      svg.appendChild(svgEl("path", { d, fill: b.color, opacity: b.opacity || 0.18, stroke: "none" }));
+    });
+
+    // series lines
+    series.forEach((s) => {
+      let d = "";
+      let penDown = false;
+      s.points.forEach((p) => {
+        if (p.v === null || p.v === undefined) { penDown = false; return; }
+        const x = xScale(p.t), y = yScale(p.v);
+        d += (penDown ? "L" : "M") + x + "," + y + " ";
+        penDown = true;
+      });
+      svg.appendChild(svgEl("path", {
+        d, fill: "none", stroke: s.color, "stroke-width": 2,
+        "stroke-linejoin": "round", "stroke-linecap": "round",
+        "stroke-dasharray": s.dashed ? "4 3" : null,
+      }));
+    });
+
+    // x-axis ticks only on the last panel
+    if (invertY === undefined || true) {
+      // handled by caller via `showXAxis`
+    }
+
+    // baseline
+    svg.appendChild(svgEl("line", {
+      x1: MARGIN.left, x2: w - MARGIN.right,
+      y1: yRange[invertY ? 0 : 1] === yRange[0] ? MARGIN.top + innerH : MARGIN.top,
+      y2: yRange[invertY ? 0 : 1] === yRange[0] ? MARGIN.top + innerH : MARGIN.top,
+      class: "baseline",
+    }));
+
+    const crosshair = svgEl("line", {
+      x1: 0, x2: 0, y1: MARGIN.top, y2: MARGIN.top + innerH, class: "crosshair", visibility: "hidden",
+    });
+    svg.appendChild(crosshair);
+    const dots = series.map((s) => {
+      const c = svgEl("circle", { r: 3.5, fill: s.color, stroke: "var(--surface-1)", "stroke-width": 1.5, visibility: "hidden" });
+      svg.appendChild(c);
+      return c;
+    });
+
+    panels.push({ xScale, yScale, crosshair, dots, series, innerW, w });
+
+    return panelDiv;
+  }
+
+  function drawXAxis(width, xDomain) {
+    const h = 26;
+    const svg = svgEl("svg", {
+      viewBox: `0 0 ${width} ${h}`, preserveAspectRatio: "none",
+      style: `width:100%; height:${h}px; display:block;`,
+    });
+    const xScale = makeScale(xDomain, [MARGIN.left, width - MARGIN.right]);
+    const ticks = niceTicks(xDomain[0], xDomain[1], 8);
+    ticks.forEach((tv) => {
+      const x = xScale(tv);
+      const label = svgEl("text", { x, y: 12, class: "axis-label", "text-anchor": "middle" });
+      label.textContent = fmtTime(tv);
+      svg.appendChild(label);
+    });
+    const wrap = document.createElement("div");
+    wrap.style.marginBottom = "8px";
+    wrap.appendChild(svg);
+    stackEl.appendChild(wrap);
+  }
+
+  function setupCrosshair(samples, width, xDomain) {
+    stackEl.style.position = "relative";
+    const overlay = svgEl("svg", { width, height: 2, style: "position:absolute; top:0; left:0; pointer-events:none;" });
+    // Use a transparent full-height div for pointer capture instead of svg overlay,
+    // since panels have varying heights.
+    const capture = document.createElement("div");
+    capture.style.position = "absolute";
+    capture.style.top = "0";
+    capture.style.left = MARGIN.left + "px";
+    capture.style.width = (panels[0].innerW) + "px";
+    capture.style.height = stackEl.scrollHeight + "px";
+    capture.style.cursor = "crosshair";
+    stackEl.style.position = "relative";
+    stackEl.appendChild(capture);
+
+    const xScale = panels[0].xScale;
+
+    function nearestIndex(t) {
+      let lo = 0, hi = samples.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (samples[mid].t < t) lo = mid + 1; else hi = mid;
+      }
+      return lo;
+    }
+
+    function move(evt) {
+      const rect = capture.getBoundingClientRect();
+      const px = evt.clientX - rect.left + MARGIN.left;
+      const t = (px - MARGIN.left) / panels[0].innerW * (xDomain[1] - xDomain[0]) + xDomain[0];
+      const idx = Math.max(0, Math.min(samples.length - 1, nearestIndex(t)));
+      const s = samples[idx];
+      const x = xScale(s.t);
+
+      panels.forEach((p) => {
+        p.crosshair.setAttribute("x1", x);
+        p.crosshair.setAttribute("x2", x);
+        p.crosshair.setAttribute("visibility", "visible");
+        p.series.forEach((ser, i) => {
+          const v = ser.points[idx] ? ser.points[idx].v : null;
+          const dot = p.dots[i];
+          if (v === null || v === undefined) { dot.setAttribute("visibility", "hidden"); return; }
+          dot.setAttribute("cx", x);
+          dot.setAttribute("cy", p.yScale(v));
+          dot.setAttribute("visibility", "visible");
+        });
+      });
+
+      // tooltip content
+      tooltip.innerHTML = "";
+      const timeRow = document.createElement("div");
+      timeRow.className = "t-time";
+      timeRow.textContent = fmtTime(s.t) + " elapsed";
+      tooltip.appendChild(timeRow);
+      const rowsData = [
+        ["Depth", s.depth, "m", "var(--series-1)"],
+        ["Ceiling", s.firstStopDepth, "m", "var(--status-critical)"],
+        ["NDL", s.ndlMin, "min", "var(--text-muted)"],
+        ["PPO2", s.ppo2, "atm", "var(--series-1)"],
+        ["Temp", s.waterTempC, "°C", "var(--series-2)"],
+        ["Tank 1", s.tankPressurePsi[0], "psi", "var(--series-1)"],
+        ["Tank 2", s.tankPressurePsi[1], "psi", "var(--series-2)"],
+      ];
+      rowsData.forEach(([name, val, unit, color]) => {
+        if (val === null || val === undefined) return;
+        const row = document.createElement("div");
+        row.className = "t-row";
+        const key = document.createElement("span");
+        key.className = "t-key";
+        key.style.background = color;
+        const valSpan = document.createElement("span");
+        valSpan.className = "t-val";
+        valSpan.textContent = (typeof val === "number" ? (Number.isInteger(val) ? val : val.toFixed(2)) : val) + " " + unit;
+        const nameSpan = document.createElement("span");
+        nameSpan.className = "t-name";
+        nameSpan.textContent = name;
+        row.appendChild(key);
+        row.appendChild(valSpan);
+        row.appendChild(nameSpan);
+        tooltip.appendChild(row);
+      });
+
+      const stackRect = stackEl.getBoundingClientRect();
+      let left = x + 12;
+      if (left + 180 > stackEl.clientWidth) left = x - 190;
+      tooltip.style.left = left + "px";
+      tooltip.style.top = (evt.clientY - stackRect.top - 10) + "px";
+      tooltip.style.opacity = "1";
+    }
+
+    capture.addEventListener("mousemove", move);
+    capture.addEventListener("mouseleave", () => {
+      tooltip.style.opacity = "0";
+      panels.forEach((p) => {
+        p.crosshair.setAttribute("visibility", "hidden");
+        p.dots.forEach((d) => d.setAttribute("visibility", "hidden"));
+      });
+    });
+  }
+
+  function buildTable(samples) {
+    const table = document.getElementById("table");
+    const cols = [
+      ["Time", (s) => fmtTime(s.t)],
+      ["Depth (m)", (s) => s.depth],
+      ["Ceiling (m)", (s) => s.firstStopDepth],
+      ["NDL (min)", (s) => s.ndlMin],
+      ["PPO2", (s) => s.ppo2],
+      ["Temp (°C)", (s) => s.waterTempC],
+      ["Tank1 (psi)", (s) => s.tankPressurePsi[0]],
+      ["Tank2 (psi)", (s) => s.tankPressurePsi[1]],
+    ];
+    const thead = document.createElement("thead");
+    const trh = document.createElement("tr");
+    cols.forEach(([name]) => {
+      const th = document.createElement("th");
+      th.textContent = name;
+      trh.appendChild(th);
+    });
+    thead.appendChild(trh);
+    table.appendChild(thead);
+
+    const tbody = document.createElement("tbody");
+    // Sample every 6th row (12s) to keep the table reasonably sized.
+    samples.forEach((s, i) => {
+      if (i % 6 !== 0) return;
+      const tr = document.createElement("tr");
+      cols.forEach(([, fn]) => {
+        const td = document.createElement("td");
+        const v = fn(s);
+        td.textContent = v === null || v === undefined ? "–" : v;
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+  }
+
+  async function main() {
+    statusEl.textContent = "Loading dive data…";
+    let index;
+    try {
+      index = await fetch("../data/dives.json").then((r) => r.json());
+    } catch (e) {
+      statusEl.textContent = "Could not load ../data/dives.json — serve this folder over http:// (see README).";
+      return;
+    }
+    if (!index.length) {
+      statusEl.textContent = "No dives found in data/dives.json.";
+      return;
+    }
+    const first = index[0];
+    const dive = await fetch("../data/" + first.file).then((r) => r.json());
+    statusEl.textContent = "";
+
+    document.getElementById("dive-title").textContent =
+      `Dive #${dive.diveNumber} — ${dive.site || "Unknown site"}`;
+    document.getElementById("dive-sub").textContent =
+      [dive.startDate, dive.location, dive.buddy ? "Buddy: " + dive.buddy : null]
+        .filter(Boolean).join(" · ");
+
+    const samples = dive.samples;
+    const temps = samples.map((s) => s.waterTempC).filter((v) => v !== null);
+    const avgTemp = temps.reduce((a, b) => a + b, 0) / temps.length;
+
+    const stats = document.getElementById("stats");
+    const statData = [
+      ["Max depth", dive.maxDepthM, "m"],
+      ["Dive time", fmtTime(dive.maxTimeSec), ""],
+      ["Avg temp", avgTemp.toFixed(1), "°C"],
+      ["Min temp", Math.min(...temps), "°C"],
+      ["GF", `${dive.gfMin}/${dive.gfMax}`, ""],
+      ["Deco time", fmtTime(samples.filter((s) => s.firstStopDepth > 0).length * 2), ""],
+    ];
+    statData.forEach(([label, value, unit]) => {
+      const el = document.createElement("div");
+      el.className = "stat";
+      el.innerHTML = `<div class="label"></div><div class="value"></div>`;
+      el.querySelector(".label").textContent = label;
+      const valEl = el.querySelector(".value");
+      valEl.textContent = value + " ";
+      const unitEl = document.createElement("span");
+      unitEl.className = "unit";
+      unitEl.textContent = unit;
+      valEl.appendChild(unitEl);
+      stats.appendChild(el);
+    });
+
+    const xDomain = [samples[0].t, samples[samples.length - 1].t];
+    const width = Math.min(1048, stackEl.clientWidth || root.clientWidth || 1048);
+
+    // Depth panel with deco-ceiling band
+    const depthMax = Math.max(...samples.map((s) => s.depth || 0)) * 1.08;
+    drawPanel({
+      title: "Depth",
+      height: 220,
+      width,
+      xDomain,
+      yDomain: [0, depthMax],
+      invertY: true,
+      yFmt: (v) => v + "m",
+      bands: [{
+        points: samples.map((s) => ({ t: s.t, v: s.firstStopDepth || 0 })),
+        base: 0,
+        color: "var(--status-critical)",
+        opacity: 0.16,
+      }],
+      series: [{
+        name: "Depth", color: "var(--series-1)",
+        points: samples.map((s) => ({ t: s.t, v: s.depth })),
+      }],
+    });
+
+    // PPO2 panel
+    drawPanel({
+      title: "PPO2",
+      height: 130,
+      width,
+      xDomain,
+      yDomain: [0, 1.8],
+      yFmt: (v) => v.toFixed(1),
+      series: [{
+        name: "PPO2", color: "var(--series-1)",
+        points: samples.map((s) => ({ t: s.t, v: s.ppo2 })),
+      }],
+    });
+
+    // Tank pressure panel (only tanks that have any data)
+    const tankSeries = [];
+    const tankColors = ["var(--series-1)", "var(--series-2)", "var(--series-3)", "var(--series-4)"];
+    for (let i = 0; i < 4; i++) {
+      if (samples.some((s) => s.tankPressurePsi[i] !== null)) {
+        tankSeries.push({
+          name: `Tank ${i + 1}`, color: tankColors[i],
+          points: samples.map((s) => ({ t: s.t, v: s.tankPressurePsi[i] })),
+        });
+      }
+    }
+    const tankMax = Math.max(...samples.flatMap((s) => s.tankPressurePsi.filter((v) => v !== null))) * 1.05;
+    drawPanel({
+      title: "Tank pressure",
+      legendItems: tankSeries.map((s) => ({ name: s.name, color: s.color })),
+      height: 150,
+      width,
+      xDomain,
+      yDomain: [0, tankMax],
+      yFmt: (v) => Math.round(v),
+      series: tankSeries,
+    });
+
+    // Water temp panel
+    drawPanel({
+      title: "Water temperature",
+      height: 130,
+      width,
+      xDomain,
+      yDomain: [Math.min(...temps) - 1, Math.max(...temps) + 1],
+      yFmt: (v) => v.toFixed(0) + "°",
+      series: [{
+        name: "Temp", color: "var(--series-2)",
+        points: samples.map((s) => ({ t: s.t, v: s.waterTempC })),
+      }],
+    });
+
+    drawXAxis(width, xDomain);
+    setupCrosshair(samples, width, xDomain);
+    buildTable(samples);
+
+    document.getElementById("table-toggle").addEventListener("click", () => {
+      const wrap = document.getElementById("table-wrap");
+      const showing = wrap.style.display === "block";
+      wrap.style.display = showing ? "none" : "block";
+      document.getElementById("table-toggle").textContent = showing ? "Show data table" : "Hide data table";
+    });
+  }
+
+  main();
+})();
+</script>
+</body>
+</html>
