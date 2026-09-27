@@ -71,6 +71,21 @@ def load_sqlite_metadata(dive_number: str):
     return {"details": details, "site": site}
 
 
+def parse_coordinates(details, site):
+    gnss = details.get("GnssEntryLocation")
+    if gnss:
+        try:
+            loc = json.loads(gnss)
+        except (json.JSONDecodeError, TypeError):
+            loc = {}
+        lat, lon = loc.get("Latitude"), loc.get("Longitude")
+        if lat is not None and lon is not None:
+            return {"lat": lat, "lon": lon}
+    if site.get("Latitude") is not None:
+        return {"lat": site.get("Latitude"), "lon": site.get("Longitude")}
+    return None
+
+
 def parse_csv(csv_path: Path):
     with csv_path.open(newline="", encoding="utf-8-sig") as f:
         rows = list(csv.reader(f))
@@ -130,11 +145,7 @@ def parse_csv(csv_path: Path):
         "site": details.get("Site"),
         "buddy": details.get("Buddy"),
         "notes": details.get("Notes"),
-        "coordinates": (
-            {"lat": site.get("Latitude"), "lon": site.get("Longitude")}
-            if site.get("Latitude") is not None
-            else None
-        ),
+        "coordinates": parse_coordinates(details, site),
         "gfMin": num_or_none(summary.get("GF Minimum")),
         "gfMax": num_or_none(summary.get("GF Maximum")),
         "surfaceIntervalMin": num_or_none(summary.get("Surface Interval (min)")),
