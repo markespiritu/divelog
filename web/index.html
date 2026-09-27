@@ -4,6 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Perdix — Dive Log</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <style>
   :root {
     color-scheme: light;
@@ -132,6 +133,8 @@
   th { position: sticky; top: 0; background: var(--surface-1); color: var(--text-secondary); font-weight: 600; }
 
   #status { color: var(--text-secondary); font-size: 13px; }
+
+  .map-container { height: 260px; border-radius: 8px; overflow: hidden; }
 </style>
 </head>
 <body>
@@ -147,11 +150,13 @@
   <div id="status"></div>
   <div class="stats" id="stats"></div>
   <div id="chart-stack"></div>
+  <div id="map-panel"></div>
   <button class="table-toggle" id="table-toggle" type="button">Show data table</button>
   <div id="table-wrap"><table id="table"></table></div>
   <div id="tooltip"></div>
 </div>
 
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 (function () {
   const root = document.getElementById("root");
@@ -604,6 +609,34 @@
     table.appendChild(tbody);
   }
 
+  function renderMap(dive) {
+    const coords = dive.coordinates;
+    if (!coords || coords.lat == null || coords.lon == null) return;
+
+    const panelDiv = document.createElement("div");
+    panelDiv.className = "panel";
+    const titleRow = document.createElement("div");
+    titleRow.className = "panel-title";
+    const titleSpan = document.createElement("span");
+    titleSpan.textContent = "Dive location";
+    titleRow.appendChild(titleSpan);
+    panelDiv.appendChild(titleRow);
+
+    const mapEl = document.createElement("div");
+    mapEl.className = "map-container";
+    panelDiv.appendChild(mapEl);
+    document.getElementById("map-panel").appendChild(panelDiv);
+
+    const map = L.map(mapEl).setView([coords.lat, coords.lon], 12);
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    }).addTo(map);
+    L.marker([coords.lat, coords.lon]).addTo(map)
+      .bindPopup(dive.site || "Dive site")
+      .openPopup();
+  }
+
   async function main() {
     statusEl.textContent = "Loading dive data…";
     let index;
@@ -748,6 +781,7 @@
 
     renderCharts();
     buildTable(samples);
+    renderMap(dive);
 
     let resizeTimer = null;
     window.addEventListener("resize", () => {

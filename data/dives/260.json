@@ -12,7 +12,10 @@
   "site": "SS Undola",
   "buddy": "Ben, Jason, Jose, Malik",
   "notes": "",
-  "coordinates": null,
+  "coordinates": {
+    "lat": -34.17947,
+    "lon": 151.093262
+  },
   "gfMin": 50,
   "gfMax": 85,
   "surfaceIntervalMin": 28626,
