@@ -155,7 +155,18 @@
   table { border-collapse: collapse; width: 100%; font-size: 12px; font-variant-numeric: tabular-nums; }
   th, td { padding: 6px 10px; text-align: right; border-bottom: 1px solid var(--gridline); white-space: nowrap; }
   th:first-child, td:first-child { text-align: left; }
-  th { position: sticky; top: 0; background: var(--surface-1); color: var(--text-secondary); font-weight: 600; }
+  th { position: sticky; top: 0; z-index: 1; background: var(--surface-1); color: var(--text-secondary); font-weight: 600; vertical-align: bottom; box-shadow: inset 0 -1px 0 var(--border); }
+  th .th-name { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+  th:first-child .th-name { justify-content: flex-start; }
+  th .th-unit { color: var(--text-muted); font-weight: 400; font-size: 11px; }
+  th .swatch { width: 10px; height: 2px; border-radius: 2px; flex: none; }
+  tbody tr:hover td { background: var(--gridline); }
+  td.deco { color: var(--status-critical); }
+  td.active-tank { font-weight: 600; }
+  tr.switch-row td {
+    text-align: left; color: var(--text-secondary); font-size: 11px; font-weight: 600;
+    background: var(--gridline); border-top: 1px solid var(--border);
+  }
 
   #status { color: var(--text-secondary); font-size: 13px; }
 
@@ -210,6 +221,26 @@
     const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
     for (const k in attrs) el.setAttribute(k, attrs[k]);
     return el;
+  }
+
+  // Standard gas name for an open-circuit mix given O2/He percentages.
+  function mixName(o2, he) {
+    if (o2 === null || o2 === undefined) return null;
+    if (he > 0) return `Tx ${o2}/${he}`;
+    if (o2 === 21) return "Air";
+    if (o2 === 100) return "O2";
+    return `EAN${o2}`;
+  }
+
+  // Display labels per tank slot, e.g. { name: "D1", mix: "EAN56", full: "EAN56 (D1)" }.
+  // Falls back to "Tank N" for dives parsed before tank names were recorded.
+  function tankLabelsFor(dive) {
+    return [0, 1, 2, 3].map((i) => {
+      const t = (dive.tanks || [])[i];
+      const name = (t && t.name) || `Tank ${i + 1}`;
+      const mix = t ? mixName(t.o2Percent, t.hePercent) : null;
+      return { name, mix, full: mix ? `${mix} (${name})` : name };
+    });
   }
 
   function fmtTime(sec) {
@@ -634,7 +665,7 @@
     stackEl.appendChild(wrap);
   }
 
-  function setupCrosshair(samples, width, xDomain, gasSwitchEvents, colors) {
+  function setupCrosshair(samples, width, xDomain, gasSwitchEvents, colors, tankLabels) {
     const MARGIN = panels[0].margin;
     stackEl.style.position = "relative";
     const overlay = svgEl("svg", { width, height: 2, style: "position:absolute; top:0; left:0; pointer-events:none;" });
@@ -707,7 +738,7 @@
         ["NDL", s.ndlMin, "min", "var(--text-muted)"],
         ["PPO2", s.ppo2, "atm", colors.ppo2],
         ["Temp", s.waterTempC, "°C", colors.temp],
-        ...s.tankPressureBar.map((v, i) => [`Tank ${i + 1}`, v, "bar", colors.tanks[i]]),
+        ...s.tankPressureBar.map((v, i) => [tankLabels[i].full, v, "bar", colors.tanks[i]]),
       ];
       rowsData.forEach(([name, val, unit, color]) => {
         if (val === null || val === undefined) return;
@@ -736,7 +767,8 @@
         row.className = "t-row";
         const valSpan = document.createElement("span");
         valSpan.className = "t-val";
-        valSpan.textContent = `Gas switch: T${nearestSwitch.e.fromTank} → T${nearestSwitch.e.toTank}`;
+        const from = tankLabels[nearestSwitch.e.fromTank - 1], to = tankLabels[nearestSwitch.e.toTank - 1];
+        valSpan.textContent = `Gas switch: ${from.full} → ${to.full}`;
         row.appendChild(valSpan);
         tooltip.appendChild(row);
       }
@@ -759,40 +791,101 @@
     });
   }
 
-  function buildTable(samples) {
+  function buildTable(samples, { tankLabels, tanksInUse, gasSwitchEvents, colors }) {
     const table = document.getElementById("table");
+    const blank = (v) => v === null || v === undefined;
+    const fixed = (dp) => (v) => (blank(v) ? "–" : v.toFixed(dp));
+
+    // Which tank is being breathed at each sample, from the detected gas switches.
+    const firstTank = gasSwitchEvents.length ? gasSwitchEvents[0].fromTank - 1 : null;
+    const activeTank = (index) => {
+      let tank = firstTank;
+      gasSwitchEvents.forEach((e) => { if (e.index <= index) tank = e.toTank - 1; });
+      return tank;
+    };
+
     const cols = [
-      ["Time", (s) => fmtTime(s.t)],
-      ["Depth (m)", (s) => s.depth],
-      ["Ceiling (m)", (s) => s.firstStopDepth],
-      ["NDL (min)", (s) => s.ndlMin],
-      ["PPO2", (s) => s.ppo2],
-      ["Temp (°C)", (s) => s.waterTempC],
-      ["Tank1 (bar)", (s) => s.tankPressureBar[0]],
-      ["Tank2 (bar)", (s) => s.tankPressureBar[1]],
+      { name: "Time", value: (s) => fmtTime(s.t) },
+      { name: "Depth", unit: "m", value: (s) => fixed(1)(s.depth) },
+      {
+        name: "Ceiling", unit: "m",
+        value: (s) => (s.firstStopDepth > 0 ? String(s.firstStopDepth) : "–"),
+        className: (s) => (s.firstStopDepth > 0 ? "deco" : ""),
+      },
+      {
+        // NDL reads 0 both at the surface and in deco; show which one it is.
+        name: "NDL", unit: "min",
+        value: (s) => (s.firstStopDepth > 0 ? "Deco" : s.ndlMin > 0 ? String(s.ndlMin) : "–"),
+        className: (s) => (s.firstStopDepth > 0 ? "deco" : ""),
+      },
+      { name: "PPO2", unit: "atm", value: (s) => fixed(2)(s.ppo2) },
+      { name: "Temp", unit: "°C", value: (s) => fixed(0)(s.waterTempC) },
+      ...tanksInUse.map((i) => ({
+        name: tankLabels[i].full, unit: "bar", color: colors.tanks[i],
+        value: (s) => fixed(0)(s.tankPressureBar[i]),
+        className: (s, index) => (activeTank(index) === i ? "active-tank" : ""),
+        style: (s, index) => (activeTank(index) === i ? colors.tanks[i] : null),
+      })),
     ];
+
     const thead = document.createElement("thead");
     const trh = document.createElement("tr");
-    cols.forEach(([name]) => {
+    cols.forEach((c) => {
       const th = document.createElement("th");
-      th.textContent = name;
+      const name = document.createElement("div");
+      name.className = "th-name";
+      if (c.color) {
+        const swatch = document.createElement("span");
+        swatch.className = "swatch";
+        swatch.style.background = c.color;
+        name.appendChild(swatch);
+      }
+      name.appendChild(document.createTextNode(c.name));
+      th.appendChild(name);
+      const unit = document.createElement("div");
+      unit.className = "th-unit";
+      unit.textContent = c.unit || "\u00a0";
+      th.appendChild(unit);
       trh.appendChild(th);
     });
     thead.appendChild(trh);
     table.appendChild(thead);
 
     const tbody = document.createElement("tbody");
-    // Sample every 6th row (12s) to keep the table reasonably sized.
-    samples.forEach((s, i) => {
-      if (i % 6 !== 0) return;
+    const addSampleRow = (s, index) => {
       const tr = document.createElement("tr");
-      cols.forEach(([, fn]) => {
+      cols.forEach((c) => {
         const td = document.createElement("td");
-        const v = fn(s);
-        td.textContent = v === null || v === undefined ? "–" : v;
+        td.textContent = c.value(s, index);
+        const cls = c.className && c.className(s, index);
+        if (cls) td.className = cls;
+        const color = c.style && c.style(s, index);
+        if (color) td.style.color = color;
         tr.appendChild(td);
       });
       tbody.appendChild(tr);
+    };
+    const addSwitchRow = (e) => {
+      const tr = document.createElement("tr");
+      tr.className = "switch-row";
+      const td = document.createElement("td");
+      td.colSpan = cols.length;
+      const from = tankLabels[e.fromTank - 1].full, to = tankLabels[e.toTank - 1].full;
+      td.textContent = `${fmtTime(e.t)} · Gas switch: ${from} → ${to}`;
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+    };
+
+    // Sample every 6th row (12s) to keep the table reasonably sized, plus a
+    // marker row and the exact sample at each gas switch.
+    const switchesAt = new Map(gasSwitchEvents.map((e) => [e.index, e]));
+    samples.forEach((s, i) => {
+      if (switchesAt.has(i)) {
+        addSwitchRow(switchesAt.get(i));
+        addSampleRow(s, i);
+      } else if (i % 6 === 0) {
+        addSampleRow(s, i);
+      }
     });
     table.appendChild(tbody);
   }
@@ -849,6 +942,7 @@
         .filter(Boolean).join(" · ");
 
     const samples = dive.samples;
+    const tankLabels = tankLabelsFor(dive);
     const temps = samples.map((s) => s.waterTempC).filter((v) => v !== null);
     const avgTemp = temps.reduce((a, b) => a + b, 0) / temps.length;
 
@@ -940,7 +1034,7 @@
 
       // Tank pressure panel (only tanks that have any data)
       const tankSeries = tanksInUse.map((i) => ({
-        name: `Tank ${i + 1}`, color: COLORS.tanks[i], points: pointsOf((s) => s.tankPressureBar[i]),
+        name: tankLabels[i].full, color: COLORS.tanks[i], points: pointsOf((s) => s.tankPressureBar[i]),
       }));
       drawPanel({
         title: "Tank pressure",
@@ -979,7 +1073,7 @@
       });
 
       drawXAxis(width, xDomain);
-      setupCrosshair(samples, width, xDomain, showGasSwitches ? gasSwitchEvents : [], COLORS);
+      setupCrosshair(samples, width, xDomain, showGasSwitches ? gasSwitchEvents : [], COLORS, tankLabels);
     }
 
     // One tall chart on the depth axis. Tank pressure is squeezed into the
@@ -991,7 +1085,7 @@
 
       const series = [
         ...tanksInUse.map((i) => ({
-          name: `Tank ${i + 1}`, color: COLORS.tanks[i], points: pointsOf((s) => s.tankPressureBar[i]), ...pressureScale,
+          name: tankLabels[i].full, color: COLORS.tanks[i], points: pointsOf((s) => s.tankPressureBar[i]), ...pressureScale,
         })),
         { name: "PPO2", color: COLORS.ppo2, points: pointsOf((s) => s.ppo2), ...ppo2Scale },
         { name: "Temp", color: COLORS.temp, dashed: true, points: pointsOf((s) => s.waterTempC), ...tempScale },
@@ -1025,7 +1119,7 @@
       });
 
       drawXAxis(width, xDomain, COMBINED_MARGIN);
-      setupCrosshair(samples, width, xDomain, showGasSwitches ? gasSwitchEvents : [], COLORS);
+      setupCrosshair(samples, width, xDomain, showGasSwitches ? gasSwitchEvents : [], COLORS, tankLabels);
     }
 
     function renderCharts() {
@@ -1037,7 +1131,7 @@
     }
 
     renderCharts();
-    buildTable(samples);
+    buildTable(samples, { tankLabels, tanksInUse, gasSwitchEvents, colors: COLORS });
     renderMap(dive);
 
     let resizeTimer = null;
