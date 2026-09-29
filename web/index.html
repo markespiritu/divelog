@@ -108,6 +108,12 @@
   .baseline { stroke: var(--baseline); stroke-width: 1; }
   .axis-label { fill: var(--text-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
   .crosshair { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 2 2; pointer-events: none; }
+  /* Halo in the surface color keeps labels readable where they cross lines. */
+  .point-label {
+    font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums;
+    stroke: var(--surface-1); stroke-width: 3px; stroke-linejoin: round; paint-order: stroke;
+    pointer-events: none;
+  }
 
   #chart-stack { position: relative; }
   #tooltip {
@@ -283,10 +289,119 @@
     return events;
   }
 
+  // Split the dive into segments at each gas switch and collect the tank
+  // pressures worth labelling: the active tank's pressure at the start of the
+  // dive, both tanks' pressures at every switch (old tank's end, new tank's
+  // start), and every tank's final pressure at the end of the dive.
+  function buildPressureLabels(samples, events, { includeSwitches }) {
+    const n = samples.length;
+    const tankCount = samples[0].tankPressureBar.length;
+    const at = (tank, i) => samples[i].tankPressureBar[tank];
+
+    // Nearest non-null reading for a tank, searching backward or forward from
+    // an index — tanks paired mid-dive have no readings before their first report.
+    function reading(tank, from, dir) {
+      for (let i = from; i >= 0 && i < n; i += dir) {
+        const v = at(tank, i);
+        if (v !== null && v !== undefined) return { index: i, v };
+      }
+      return null;
+    }
+
+    let firstTank;
+    if (events.length) {
+      firstTank = events[0].fromTank - 1;
+    } else {
+      // No switches: the active tank is whichever one dropped the most.
+      let bestDrop = -Infinity;
+      for (let tank = 0; tank < tankCount; tank++) {
+        const first = reading(tank, 0, 1), last = reading(tank, n - 1, -1);
+        if (first && last && first.v - last.v > bestDrop) { bestDrop = first.v - last.v; firstTank = tank; }
+      }
+    }
+
+    const labels = [];
+    const push = (tank, r, side) => {
+      if (r) labels.push({ tank, t: samples[r.index].t, v: r.v, side });
+    };
+
+    if (firstTank !== undefined) push(firstTank, reading(firstTank, 0, 1), "right");
+
+    if (includeSwitches) {
+      events.forEach((e) => {
+        push(e.fromTank - 1, reading(e.fromTank - 1, Math.max(0, e.index - 1), -1), "left");
+        push(e.toTank - 1, reading(e.toTank - 1, e.index, 1), "right");
+      });
+    }
+
+    for (let tank = 0; tank < tankCount; tank++) push(tank, reading(tank, n - 1, -1), "left");
+
+    return labels;
+  }
+
+  // Draw value labels next to their points, nudging each one vertically until
+  // it clears every label placed before it (and any fixed obstacles such as
+  // gas switch markers). Displaced labels get a thin leader back to their dot.
+  function drawPointLabels(svg, labels, { xScale, yScale, top, bottom, obstacles }) {
+    const GAP = 6, PAD = 2, STEP = 2;
+    const placed = (obstacles || []).slice();
+    const overlaps = (a, b) =>
+      a.x < b.x + b.w + PAD && b.x < a.x + a.w + PAD && a.y < b.y + b.h + PAD && b.y < a.y + a.h + PAD;
+
+    // Dots first, so they sit under every label and count as obstacles.
+    labels.forEach((l) => {
+      l.px = xScale(l.t);
+      l.py = yScale(l.v);
+      svg.appendChild(svgEl("circle", {
+        cx: l.px, cy: l.py, r: 3, fill: l.color, stroke: "var(--surface-1)", "stroke-width": 1.5,
+      }));
+      placed.push({ x: l.px - 3, y: l.py - 3, w: 6, h: 6, owner: l });
+    });
+
+    labels.forEach((l) => {
+      const text = svgEl("text", {
+        class: "point-label", fill: l.color,
+        x: l.side === "left" ? l.px - GAP : l.px + GAP,
+        "text-anchor": l.side === "left" ? "end" : "start",
+        "dominant-baseline": "central",
+      });
+      text.textContent = l.text;
+      svg.appendChild(text);
+      const box = text.getBBox();
+      const h = box.height, w = box.width;
+      const x = l.side === "left" ? l.px - GAP - w : l.px + GAP;
+      const minY = top + h / 2, maxY = bottom - h / 2;
+      const clamp = (y) => Math.min(maxY, Math.max(minY, y));
+      // The label's own dot is right beside it; ignore it when testing.
+      const others = placed.filter((p) => p.owner !== l);
+
+      // Try the point's own height first, then step outward alternately up
+      // and down; if nothing is free, fall back to the point's height.
+      const start = clamp(l.py);
+      let y = start;
+      const reach = Math.max(start - minY, maxY - start);
+      for (let d = 0; d <= reach; d += STEP) {
+        const free = [start - d, start + d].find((cy) =>
+          cy >= minY && cy <= maxY && !others.some((p) => overlaps({ x, y: cy - h / 2, w, h }, p)));
+        if (free !== undefined) { y = free; break; }
+      }
+
+      text.setAttribute("y", y);
+      placed.push({ x, y: y - h / 2, w, h });
+      if (Math.abs(y - l.py) > 3) {
+        const edgeX = l.side === "left" ? l.px - GAP + 2 : l.px + GAP - 2;
+        svg.insertBefore(svgEl("line", {
+          x1: l.px, y1: l.py, x2: edgeX, y2: y,
+          stroke: l.color, "stroke-width": 1, opacity: 0.7,
+        }), text);
+      }
+    });
+  }
+
   // Panel registry so the shared crosshair can update every chart at once.
   const panels = [];
 
-  function drawPanel({ title, legendItems, height, width, xDomain, series, yDomain, yFmt, invertY, bands, markers, toggle }) {
+  function drawPanel({ title, legendItems, height, width, xDomain, series, yDomain, yFmt, invertY, bands, markers, pointLabels, toggle }) {
     const w = width, h = height;
     const innerW = w - MARGIN.left - MARGIN.right;
     const innerH = h - MARGIN.top - MARGIN.bottom;
@@ -395,6 +510,14 @@
         fill: "var(--text-secondary)", opacity: 0.85,
       }));
     });
+
+    if (pointLabels && pointLabels.length) {
+      // Gas switch triangles at the top of the plot are obstacles for labels.
+      const obstacles = (markers || []).map((m) => ({ x: xScale(m.t) - 4, y: MARGIN.top, w: 8, h: 7 }));
+      drawPointLabels(svg, pointLabels, {
+        xScale, yScale, top: MARGIN.top, bottom: MARGIN.top + innerH, obstacles,
+      });
+    }
 
     // x-axis ticks only on the last panel
     if (invertY === undefined || true) {
@@ -730,16 +853,19 @@
         }
       }
       const tankMax = Math.max(...samples.flatMap((s) => s.tankPressureBar.filter((v) => v !== null))) * 1.05;
+      const pressureLabels = buildPressureLabels(samples, gasSwitchEvents, { includeSwitches: showGasSwitches })
+        .map((l) => ({ ...l, color: tankColors[l.tank], text: `${Math.round(l.v)} bar` }));
       drawPanel({
         title: "Tank pressure",
         legendItems: tankSeries.map((s) => ({ name: s.name, color: s.color })),
-        height: 180,
+        height: 280,
         width,
         xDomain,
         yDomain: [0, tankMax],
         yFmt: (v) => Math.round(v) + " bar",
         series: tankSeries,
         markers: showGasSwitches ? gasSwitchEvents : [],
+        pointLabels: pressureLabels,
         toggle: {
           label: "Show gas switches",
           checked: showGasSwitches,
