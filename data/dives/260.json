@@ -27,6 +27,28 @@
   "endBatteryVoltage": 3.4,
   "startCns": 0,
   "endCns": 41,
+  "tanks": [
+    {
+      "name": "S1",
+      "o2Percent": 21,
+      "hePercent": 0
+    },
+    {
+      "name": "S2",
+      "o2Percent": 21,
+      "hePercent": 0
+    },
+    {
+      "name": "D1",
+      "o2Percent": 56,
+      "hePercent": 0
+    },
+    {
+      "name": "D2",
+      "o2Percent": 86,
+      "hePercent": 0
+    }
+  ],
   "samples": [
     {
       "t": 0,
