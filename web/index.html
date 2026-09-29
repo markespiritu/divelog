@@ -20,6 +20,7 @@
     --series-2:       #eb6834; /* orange */
     --series-3:       #1baf7a; /* aqua   */
     --series-4:       #eda100; /* yellow */
+    --series-5:       #8a4fd6; /* violet */
     --status-critical:#d03b3b;
     --status-good:    #0ca30c;
     --seq-100:        #cde2fb;
@@ -39,6 +40,7 @@
       --series-2:       #d95926;
       --series-3:       #199e70;
       --series-4:       #c98500;
+      --series-5:       #a078ec;
       --status-critical:#e66767;
       --status-good:    #0ca30c;
       --seq-100:        #184f95;
@@ -58,6 +60,7 @@
     --series-2:       #d95926;
     --series-3:       #199e70;
     --series-4:       #c98500;
+    --series-5:       #a078ec;
     --status-critical:#e66767;
     --status-good:    #0ca30c;
     --seq-100:        #184f95;
@@ -94,14 +97,27 @@
     background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
     padding: 14px 16px 8px; margin-bottom: 12px;
   }
-  .panel-title { position: relative; z-index: 2; font-size: 13px; color: var(--text-secondary); margin-bottom: 2px; display:flex; justify-content:space-between; align-items:center;}
-  .panel-controls { display: flex; align-items: center; gap: 14px; }
-  .legend { display: flex; gap: 14px; font-size: 12px; color: var(--text-secondary); }
-  .legend .key { display: inline-flex; align-items: center; gap: 5px; }
+  .panel-title { position: relative; z-index: 2; font-size: 13px; color: var(--text-secondary); margin-bottom: 2px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap: 4px 14px;}
+  .panel-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 14px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--text-secondary); }
+  .legend .key { white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; }
   .legend .swatch { width: 14px; height: 2px; border-radius: 2px; display:inline-block; }
   .panel-toggle { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-secondary); cursor: pointer; user-select: none; }
   .panel-toggle input { cursor: pointer; }
   .gas-switch-tag { fill: var(--text-secondary); font-size: 9px; }
+
+  .chart-toolbar { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+  .view-switch {
+    display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
+    background: var(--surface-1);
+  }
+  .view-switch button {
+    border: none; background: none; color: var(--text-secondary); font-size: 13px;
+    padding: 6px 12px; cursor: pointer;
+  }
+  .view-switch button + button { border-left: 1px solid var(--border); }
+  .view-switch button[aria-pressed="true"] { background: var(--seq-100); color: var(--text-primary); }
+  .band-divider { stroke: var(--baseline); stroke-width: 1; stroke-dasharray: 4 4; }
 
   svg { display: block; overflow: visible; }
   .gridline { stroke: var(--gridline); stroke-width: 1; }
@@ -155,6 +171,12 @@
 
   <div id="status"></div>
   <div class="stats" id="stats"></div>
+  <div class="chart-toolbar">
+    <div class="view-switch" id="view-switch" role="group" aria-label="Chart layout">
+      <button type="button" data-view="separate">Separate</button>
+      <button type="button" data-view="combined">Combined</button>
+    </div>
+  </div>
   <div id="chart-stack"></div>
   <div id="map-panel"></div>
   <button class="table-toggle" id="table-toggle" type="button">Show data table</button>
@@ -177,7 +199,9 @@
   const tooltip = document.getElementById("tooltip");
   const stackEl = document.getElementById("chart-stack");
 
-  const MARGIN = { top: 8, right: 16, bottom: 20, left: 44 };
+  const DEFAULT_MARGIN = { top: 8, right: 16, bottom: 20, left: 44 };
+  // The combined chart needs room on the right for its banded scales' ticks.
+  const COMBINED_MARGIN = { ...DEFAULT_MARGIN, right: 60 };
 
   function svgEl(tag, attrs) {
     const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
@@ -411,10 +435,21 @@
   // Panel registry so the shared crosshair can update every chart at once.
   const panels = [];
 
-  function drawPanel({ title, legendItems, height, width, xDomain, series, yDomain, yFmt, invertY, bands, markers, pointLabels, toggle }) {
+  // Series, point labels and right-hand axes may each claim a horizontal
+  // slice of the plot (`band`: [top, bottom] as fractions of the plot height)
+  // with their own value domain, so several units can share one chart. Anything
+  // without a band uses the panel's own y-domain across the full height.
+  function drawPanel({ title, legendItems, height, width, xDomain, series, yDomain, yFmt, invertY, bands, markers, pointLabels, pointLabelScale, rightAxes, dividers, toggle, margin }) {
+    const MARGIN = margin || DEFAULT_MARGIN;
     const w = width, h = height;
     const innerW = w - MARGIN.left - MARGIN.right;
     const innerH = h - MARGIN.top - MARGIN.bottom;
+    const bandTop = (f) => MARGIN.top + f * innerH;
+    function scaleFor(spec) {
+      if (!spec || !spec.band) return yScale;
+      const [top, bottom] = spec.band.map(bandTop);
+      return makeScale(spec.domain, spec.invert ? [top, bottom] : [bottom, top]);
+    }
 
     const panelDiv = document.createElement("div");
     panelDiv.className = "panel";
@@ -435,7 +470,9 @@
           key.className = "key";
           const sw = document.createElement("span");
           sw.className = "swatch";
-          sw.style.background = li.color;
+          sw.style.background = li.dashed
+            ? `repeating-linear-gradient(90deg, ${li.color} 0 4px, transparent 4px 7px)`
+            : li.color;
           const label = document.createElement("span");
           label.textContent = li.name;
           key.appendChild(sw);
@@ -482,6 +519,24 @@
       svg.appendChild(label);
     });
 
+    // band dividers, marking where each banded scale's slice begins/ends
+    (dividers || []).forEach((f) => {
+      const y = bandTop(f);
+      svg.appendChild(svgEl("line", { x1: MARGIN.left, x2: w - MARGIN.right, y1: y, y2: y, class: "band-divider" }));
+    });
+
+    // right-hand tick labels for banded scales
+    (rightAxes || []).forEach((a) => {
+      const scale = scaleFor(a);
+      niceTicks(a.domain[0], a.domain[1], a.ticks || 3).forEach((tv) => {
+        const label = svgEl("text", {
+          x: w - MARGIN.right + 8, y: scale(tv) + 3, class: "axis-label", "text-anchor": "start",
+        });
+        label.textContent = a.fmt ? a.fmt(tv) : tv;
+        svg.appendChild(label);
+      });
+    });
+
     // shaded bands (e.g. deco ceiling zone)
     (bands || []).forEach((b) => {
       const path = b.points.map((p, i) => `${i === 0 ? "M" : "L"}${xScale(p.t)},${yScale(p.v)}`).join(" ");
@@ -492,17 +547,19 @@
     });
 
     // series lines
-    series.forEach((s) => {
+    const seriesScales = series.map(scaleFor);
+    series.forEach((s, si) => {
+      const sScale = seriesScales[si];
       let d = "";
       let penDown = false;
       s.points.forEach((p) => {
         if (p.v === null || p.v === undefined) { penDown = false; return; }
-        const x = xScale(p.t), y = yScale(p.v);
+        const x = xScale(p.t), y = sScale(p.v);
         d += (penDown ? "L" : "M") + x + "," + y + " ";
         penDown = true;
       });
       svg.appendChild(svgEl("path", {
-        d, fill: "none", stroke: s.color, "stroke-width": 2,
+        d, fill: "none", stroke: s.color, "stroke-width": s.width || 2,
         "stroke-linejoin": "round", "stroke-linecap": "round",
         "stroke-dasharray": s.dashed ? "4 3" : null,
       }));
@@ -524,14 +581,10 @@
     if (pointLabels && pointLabels.length) {
       // Gas switch triangles at the top of the plot are obstacles for labels.
       const obstacles = (markers || []).map((m) => ({ x: xScale(m.t) - 4, y: MARGIN.top, w: 8, h: 7 }));
+      const band = (pointLabelScale && pointLabelScale.band) || [0, 1];
       drawPointLabels(svg, pointLabels, {
-        xScale, yScale, top: MARGIN.top, bottom: MARGIN.top + innerH, obstacles,
+        xScale, yScale: scaleFor(pointLabelScale), top: bandTop(band[0]), bottom: bandTop(band[1]), obstacles,
       });
-    }
-
-    // x-axis ticks only on the last panel
-    if (invertY === undefined || true) {
-      // handled by caller via `showXAxis`
     }
 
     // baseline
@@ -552,12 +605,13 @@
       return c;
     });
 
-    panels.push({ xScale, yScale, crosshair, dots, series, innerW, w, svg });
+    panels.push({ xScale, seriesScales, crosshair, dots, series, innerW, w, svg, margin: MARGIN });
 
     return panelDiv;
   }
 
-  function drawXAxis(width, xDomain) {
+  function drawXAxis(width, xDomain, margin) {
+    const MARGIN = margin || DEFAULT_MARGIN;
     const h = 26;
     const svg = svgEl("svg", {
       viewBox: `0 0 ${width} ${h}`, preserveAspectRatio: "none",
@@ -577,7 +631,8 @@
     stackEl.appendChild(wrap);
   }
 
-  function setupCrosshair(samples, width, xDomain, gasSwitchEvents) {
+  function setupCrosshair(samples, width, xDomain, gasSwitchEvents, colors) {
+    const MARGIN = panels[0].margin;
     stackEl.style.position = "relative";
     const overlay = svgEl("svg", { width, height: 2, style: "position:absolute; top:0; left:0; pointer-events:none;" });
     // Use a transparent full-height div for pointer capture instead of svg overlay,
@@ -632,7 +687,7 @@
           const dot = p.dots[i];
           if (v === null || v === undefined) { dot.setAttribute("visibility", "hidden"); return; }
           dot.setAttribute("cx", x);
-          dot.setAttribute("cy", p.yScale(v));
+          dot.setAttribute("cy", p.seriesScales[i](v));
           dot.setAttribute("visibility", "visible");
         });
       });
@@ -644,15 +699,12 @@
       timeRow.textContent = fmtTime(s.t) + " elapsed";
       tooltip.appendChild(timeRow);
       const rowsData = [
-        ["Depth", s.depth, "m", "var(--series-1)"],
+        ["Depth", s.depth, "m", colors.depth],
         ["Ceiling", s.firstStopDepth, "m", "var(--status-critical)"],
         ["NDL", s.ndlMin, "min", "var(--text-muted)"],
-        ["PPO2", s.ppo2, "atm", "var(--series-1)"],
-        ["Temp", s.waterTempC, "°C", "var(--series-2)"],
-        ["Tank 1", s.tankPressureBar[0], "bar", "var(--series-1)"],
-        ["Tank 2", s.tankPressureBar[1], "bar", "var(--series-2)"],
-        ["Tank 3", s.tankPressureBar[2], "bar", "var(--series-3)"],
-        ["Tank 4", s.tankPressureBar[3], "bar", "var(--series-4)"],
+        ["PPO2", s.ppo2, "atm", colors.ppo2],
+        ["Temp", s.waterTempC, "°C", colors.temp],
+        ...s.tankPressureBar.map((v, i) => [`Tank ${i + 1}`, v, "bar", colors.tanks[i]]),
       ];
       rowsData.forEach(([name, val, unit, color]) => {
         if (val === null || val === undefined) return;
@@ -824,47 +876,69 @@
     const gasSwitchEvents = detectGasSwitches(samples);
     let showGasSwitches = true;
 
-    function renderCharts() {
-      stackEl.innerHTML = "";
-      panels.length = 0;
-      const width = Math.min(1048, stackEl.clientWidth || root.clientWidth || 1048);
+    const viewSwitch = document.getElementById("view-switch");
+    let chartView = "separate";
+    try { if (localStorage.getItem("divelog.chartView") === "combined") chartView = "combined"; } catch (e) {}
+    function syncViewSwitch() {
+      viewSwitch.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.view === chartView)));
+    }
+    syncViewSwitch();
+    viewSwitch.addEventListener("click", (evt) => {
+      const view = evt.target.closest("button")?.dataset.view;
+      if (!view || view === chartView) return;
+      chartView = view;
+      try { localStorage.setItem("divelog.chartView", view); } catch (e) {}
+      syncViewSwitch();
+      renderCharts();
+    });
 
+    const DEPTH_HEIGHT = 264;
+    const depthMax = Math.max(...samples.map((s) => s.depth || 0)) * 1.08;
+    const tankMax = Math.max(...samples.flatMap((s) => s.tankPressureBar.filter((v) => v !== null))) * 1.05;
+    const tempDomain = [Math.min(...temps) - 1, Math.max(...temps) + 1];
+    // Series colors are shared by both views so each one reads the same in
+    // either layout. Tanks: blue, red, yellow, green.
+    const COLORS = {
+      depth: "var(--text-primary)",
+      ppo2: "var(--series-5)",
+      temp: "var(--text-muted)",
+      tanks: ["var(--series-1)", "var(--series-2)", "var(--series-4)", "var(--series-3)"],
+    };
+    const tanksInUse = [0, 1, 2, 3].filter((i) => samples.some((s) => s.tankPressureBar[i] !== null));
+    const decoBand = {
+      points: samples.map((s) => ({ t: s.t, v: s.firstStopDepth || 0 })),
+      base: 0,
+      color: "var(--status-critical)",
+      opacity: 0.16,
+    };
+    const pointsOf = (fn) => samples.map((s) => ({ t: s.t, v: fn(s) }));
+    const gasSwitchToggle = () => ({
+      label: "Show gas switches",
+      checked: showGasSwitches,
+      onChange: (checked) => { showGasSwitches = checked; renderCharts(); },
+    });
+    const pressureLabelsFor = () =>
+      buildPressureLabels(samples, gasSwitchEvents, { includeSwitches: showGasSwitches })
+        .map((l) => ({ ...l, color: COLORS.tanks[l.tank], text: `${Math.round(l.v)} bar` }));
+
+    function renderSeparate(width) {
       // Depth panel with deco-ceiling band
-      const depthMax = Math.max(...samples.map((s) => s.depth || 0)) * 1.08;
       drawPanel({
         title: "Depth",
-        height: 264,
+        height: DEPTH_HEIGHT,
         width,
         xDomain,
         yDomain: [0, depthMax],
         invertY: true,
         yFmt: (v) => v + "m",
-        bands: [{
-          points: samples.map((s) => ({ t: s.t, v: s.firstStopDepth || 0 })),
-          base: 0,
-          color: "var(--status-critical)",
-          opacity: 0.16,
-        }],
-        series: [{
-          name: "Depth", color: "var(--series-1)",
-          points: samples.map((s) => ({ t: s.t, v: s.depth })),
-        }],
+        bands: [decoBand],
+        series: [{ name: "Depth", color: COLORS.depth, points: pointsOf((s) => s.depth) }],
       });
 
       // Tank pressure panel (only tanks that have any data)
-      const tankSeries = [];
-      const tankColors = ["var(--series-1)", "var(--series-2)", "var(--series-3)", "var(--series-4)"];
-      for (let i = 0; i < 4; i++) {
-        if (samples.some((s) => s.tankPressureBar[i] !== null)) {
-          tankSeries.push({
-            name: `Tank ${i + 1}`, color: tankColors[i],
-            points: samples.map((s) => ({ t: s.t, v: s.tankPressureBar[i] })),
-          });
-        }
-      }
-      const tankMax = Math.max(...samples.flatMap((s) => s.tankPressureBar.filter((v) => v !== null))) * 1.05;
-      const pressureLabels = buildPressureLabels(samples, gasSwitchEvents, { includeSwitches: showGasSwitches })
-        .map((l) => ({ ...l, color: tankColors[l.tank], text: `${Math.round(l.v)} bar` }));
+      const tankSeries = tanksInUse.map((i) => ({
+        name: `Tank ${i + 1}`, color: COLORS.tanks[i], points: pointsOf((s) => s.tankPressureBar[i]),
+      }));
       drawPanel({
         title: "Tank pressure",
         legendItems: tankSeries.map((s) => ({ name: s.name, color: s.color })),
@@ -875,12 +949,8 @@
         yFmt: (v) => Math.round(v) + " bar",
         series: tankSeries,
         markers: showGasSwitches ? gasSwitchEvents : [],
-        pointLabels: pressureLabels,
-        toggle: {
-          label: "Show gas switches",
-          checked: showGasSwitches,
-          onChange: (checked) => { showGasSwitches = checked; renderCharts(); },
-        },
+        pointLabels: pressureLabelsFor(),
+        toggle: gasSwitchToggle(),
       });
 
       // PPO2 panel
@@ -891,10 +961,7 @@
         xDomain,
         yDomain: [0, 1.8],
         yFmt: (v) => v.toFixed(1),
-        series: [{
-          name: "PPO2", color: "var(--series-1)",
-          points: samples.map((s) => ({ t: s.t, v: s.ppo2 })),
-        }],
+        series: [{ name: "PPO2", color: COLORS.ppo2, points: pointsOf((s) => s.ppo2) }],
       });
 
       // Water temp panel
@@ -903,16 +970,67 @@
         height: 156,
         width,
         xDomain,
-        yDomain: [Math.min(...temps) - 1, Math.max(...temps) + 1],
+        yDomain: tempDomain,
         yFmt: (v) => v.toFixed(0) + "°",
-        series: [{
-          name: "Temp", color: "var(--series-2)",
-          points: samples.map((s) => ({ t: s.t, v: s.waterTempC })),
-        }],
+        series: [{ name: "Temp", color: COLORS.temp, points: pointsOf((s) => s.waterTempC) }],
       });
 
       drawXAxis(width, xDomain);
-      setupCrosshair(samples, width, xDomain, showGasSwitches ? gasSwitchEvents : []);
+      setupCrosshair(samples, width, xDomain, showGasSwitches ? gasSwitchEvents : [], COLORS);
+    }
+
+    // One tall chart on the depth axis. Tank pressure is squeezed into the
+    // middle half; PPO2 and water temperature split the bottom quarter.
+    function renderCombined(width) {
+      const pressureScale = { domain: [0, tankMax], band: [0.25, 0.75] };
+      const ppo2Scale = { domain: [0, 1.8], band: [0.77, 0.865] };
+      const tempScale = { domain: tempDomain, band: [0.885, 1] };
+
+      const series = [
+        ...tanksInUse.map((i) => ({
+          name: `Tank ${i + 1}`, color: COLORS.tanks[i], points: pointsOf((s) => s.tankPressureBar[i]), ...pressureScale,
+        })),
+        { name: "PPO2", color: COLORS.ppo2, points: pointsOf((s) => s.ppo2), ...ppo2Scale },
+        { name: "Temp", color: COLORS.temp, dashed: true, points: pointsOf((s) => s.waterTempC), ...tempScale },
+        // Depth last so it draws on top of everything else.
+        { name: "Depth", color: COLORS.depth, width: 2.5, points: pointsOf((s) => s.depth) },
+      ];
+      const legendOrder = [series[series.length - 1], ...series.slice(0, -1)];
+
+      drawPanel({
+        title: "Dive profile",
+        legendItems: legendOrder.map((s) => ({ name: s.name, color: s.color, dashed: s.dashed })),
+        height: Math.round(DEPTH_HEIGHT * 2.5),
+        width,
+        margin: COMBINED_MARGIN,
+        xDomain,
+        yDomain: [0, depthMax],
+        invertY: true,
+        yFmt: (v) => v + "m",
+        bands: [decoBand],
+        series,
+        dividers: [0.25, 0.75, 0.875],
+        rightAxes: [
+          { ...pressureScale, ticks: 4, fmt: (v) => Math.round(v) + " bar" },
+          { ...ppo2Scale, ticks: 3, fmt: (v) => v.toFixed(1) + " atm" },
+          { ...tempScale, ticks: 3, fmt: (v) => v.toFixed(0) + "°C" },
+        ],
+        markers: showGasSwitches ? gasSwitchEvents : [],
+        pointLabels: pressureLabelsFor(),
+        pointLabelScale: pressureScale,
+        toggle: gasSwitchToggle(),
+      });
+
+      drawXAxis(width, xDomain, COMBINED_MARGIN);
+      setupCrosshair(samples, width, xDomain, showGasSwitches ? gasSwitchEvents : [], COLORS);
+    }
+
+    function renderCharts() {
+      stackEl.innerHTML = "";
+      panels.length = 0;
+      const width = Math.min(1048, stackEl.clientWidth || root.clientWidth || 1048);
+      if (chartView === "combined") renderCombined(width);
+      else renderSeparate(width);
     }
 
     renderCharts();
