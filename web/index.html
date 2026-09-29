@@ -11,6 +11,7 @@
     --surface-1:      #fcfcfb;
     --page-plane:     #f9f9f7;
     --text-primary:   #0b0b0b;
+    --depth-line:     #3d3c38;
     --text-secondary: #52514e;
     --text-muted:     #898781;
     --gridline:       #e1e0d9;
@@ -31,6 +32,7 @@
       --surface-1:      #1a1a19;
       --page-plane:     #0d0d0d;
       --text-primary:   #ffffff;
+      --depth-line:     #d6d5cf;
       --text-secondary: #c3c2b7;
       --text-muted:     #898781;
       --gridline:       #2c2c2a;
@@ -51,6 +53,7 @@
     --surface-1:      #1a1a19;
     --page-plane:     #0d0d0d;
     --text-primary:   #ffffff;
+    --depth-line:     #d6d5cf;
     --text-secondary: #c3c2b7;
     --text-muted:     #898781;
     --gridline:       #2c2c2a;
@@ -173,8 +176,8 @@
   <div class="stats" id="stats"></div>
   <div class="chart-toolbar">
     <div class="view-switch" id="view-switch" role="group" aria-label="Chart layout">
-      <button type="button" data-view="separate">Separate</button>
       <button type="button" data-view="combined">Combined</button>
+      <button type="button" data-view="separate">Separate</button>
     </div>
   </div>
   <div id="chart-stack"></div>
@@ -877,8 +880,8 @@
     let showGasSwitches = true;
 
     const viewSwitch = document.getElementById("view-switch");
-    let chartView = "separate";
-    try { if (localStorage.getItem("divelog.chartView") === "combined") chartView = "combined"; } catch (e) {}
+    let chartView = "combined";
+    try { if (localStorage.getItem("divelog.chartView") === "separate") chartView = "separate"; } catch (e) {}
     function syncViewSwitch() {
       viewSwitch.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.view === chartView)));
     }
@@ -899,7 +902,7 @@
     // Series colors are shared by both views so each one reads the same in
     // either layout. Tanks: blue, red, yellow, green.
     const COLORS = {
-      depth: "var(--text-primary)",
+      depth: "var(--depth-line)",
       ppo2: "var(--series-5)",
       temp: "var(--text-muted)",
       tanks: ["var(--series-1)", "var(--series-2)", "var(--series-4)", "var(--series-3)"],
@@ -993,7 +996,7 @@
         { name: "PPO2", color: COLORS.ppo2, points: pointsOf((s) => s.ppo2), ...ppo2Scale },
         { name: "Temp", color: COLORS.temp, dashed: true, points: pointsOf((s) => s.waterTempC), ...tempScale },
         // Depth last so it draws on top of everything else.
-        { name: "Depth", color: COLORS.depth, width: 2.5, points: pointsOf((s) => s.depth) },
+        { name: "Depth", color: COLORS.depth, width: 2, points: pointsOf((s) => s.depth) },
       ];
       const legendOrder = [series[series.length - 1], ...series.slice(0, -1)];
 
