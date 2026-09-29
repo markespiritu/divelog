@@ -46,6 +46,8 @@
       --status-critical:#e66767;
       --status-good:    #0ca30c;
       --seq-100:        #184f95;
+      --map-tile-filter: invert(1) hue-rotate(180deg) brightness(0.95) contrast(0.9) saturate(0.6);
+      --map-bg:         #262624;
     }
   }
   :root[data-theme="dark"] {
@@ -67,6 +69,8 @@
     --status-critical:#e66767;
     --status-good:    #0ca30c;
     --seq-100:        #184f95;
+    --map-tile-filter: invert(1) hue-rotate(180deg) brightness(0.95) contrast(0.9) saturate(0.6);
+    --map-bg:         #262624;
   }
 
   * { box-sizing: border-box; }
@@ -171,6 +175,21 @@
   #status { color: var(--text-secondary); font-size: 13px; }
 
   .map-container { height: 260px; border-radius: 8px; overflow: hidden; }
+  /* Dark mode: invert the OSM raster tiles (not the marker) and darken the controls and popup. */
+  .map-container.leaflet-container { background: var(--map-bg, #ddd); }
+  .map-container .leaflet-tile-pane { filter: var(--map-tile-filter, none); }
+  :root[data-theme="dark"] .map-container .leaflet-bar a,
+  :root[data-theme="dark"] .map-container .leaflet-control-attribution,
+  :root[data-theme="dark"] .map-container .leaflet-popup-content-wrapper,
+  :root[data-theme="dark"] .map-container .leaflet-popup-tip { background: var(--surface-1); color: var(--text-secondary); border-color: var(--baseline); }
+  :root[data-theme="dark"] .map-container .leaflet-control-attribution a { color: var(--series-1); }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .map-container .leaflet-bar a,
+    :root:where(:not([data-theme="light"])) .map-container .leaflet-control-attribution,
+    :root:where(:not([data-theme="light"])) .map-container .leaflet-popup-content-wrapper,
+    :root:where(:not([data-theme="light"])) .map-container .leaflet-popup-tip { background: var(--surface-1); color: var(--text-secondary); border-color: var(--baseline); }
+    :root:where(:not([data-theme="light"])) .map-container .leaflet-control-attribution a { color: var(--series-1); }
+  }
 </style>
 </head>
 <body>
