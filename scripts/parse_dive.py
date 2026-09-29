@@ -86,6 +86,33 @@ def parse_coordinates(details, site):
     return None
 
 
+def parse_tanks(details):
+    """Tank name and breathing mix per transmitter, from Shearwater Cloud's TankProfileData.
+
+    Returns a list indexed like tankPressureBar (tank 1..4); None for slots
+    with no transmitter paired.
+    """
+    try:
+        profile = json.loads(details.get("TankProfileData") or "")
+    except json.JSONDecodeError:
+        return []
+    tanks = [None] * 4
+    for entry in profile.get("TankData") or []:
+        transmitter = entry.get("DiveTransmitter")
+        if not transmitter:
+            continue
+        index = transmitter.get("TankIndex")
+        if index is None or not 0 <= index < len(tanks):
+            continue
+        gas = entry.get("GasProfile") or {}
+        tanks[index] = {
+            "name": transmitter.get("Name") or f"T{index + 1}",
+            "o2Percent": gas.get("O2Percent"),
+            "hePercent": gas.get("HePercent"),
+        }
+    return tanks
+
+
 def parse_csv(csv_path: Path):
     with csv_path.open(newline="", encoding="utf-8-sig") as f:
         rows = list(csv.reader(f))
@@ -157,6 +184,7 @@ def parse_csv(csv_path: Path):
         "endBatteryVoltage": num_or_none(summary.get("End Battery Voltage")),
         "startCns": num_or_none(summary.get("Start CNS %")),
         "endCns": num_or_none(summary.get("End CNS")),
+        "tanks": parse_tanks(details),
         "samples": samples,
     }
     return dive
