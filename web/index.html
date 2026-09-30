@@ -105,7 +105,8 @@
     padding: 14px 16px 8px; margin-bottom: 12px;
   }
   .panel-title { position: relative; z-index: 2; font-size: 13px; color: var(--text-secondary); margin-bottom: 2px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap: 4px 14px;}
-  .panel-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 14px; }
+  /* Above the crosshair's pointer-capture layer, which spans the whole chart stack. */
+  .panel-controls { position: relative; z-index: 2; display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: 4px 14px; margin: -4px 0 12px; }
   .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--text-secondary); }
   .legend .key { white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; }
   .legend .swatch { width: 14px; height: 2px; border-radius: 2px; display:inline-block; }
@@ -297,57 +298,104 @@
     return ticks;
   }
 
-  // Detect gas switches from tank pressure trends: at any point in time the
-  // diver breathes from exactly one tank, so that tank's pressure drops
-  // steadily while the others sit flat (aside from sensor noise). We scan a
-  // rolling window per tank looking for a sustained, consistent drop, pick
-  // whichever tank has the strongest such drop at each sample, and emit an
-  // event wherever that "active tank" changes.
-  function detectGasSwitches(samples) {
+  // Detect gas switches. A change in the logged O2/He fractions is the
+  // computer's own record of a switch, so it's taken as definitive. Between
+  // those, the diver may still move between tanks carrying the same mix
+  // (e.g. two air sidemount tanks), which only shows up in the pressures.
+  // Each switch names the tanks involved where known, plus the mixes.
+  function detectGasSwitches(samples, tanks) {
+    const mixOf = (s) => ({ o2: Math.round(s.fractionO2 * 100), he: Math.round((s.fractionHe || 0) * 100) });
+    const sameMix = (a, b) => a.o2 === b.o2 && a.he === b.he;
+
+    // Split the dive into segments of constant logged mix.
+    const segments = [];
+    samples.forEach((s, i) => {
+      const mix = mixOf(s), last = segments[segments.length - 1];
+      if (last && sameMix(last.mix, mix)) last.end = i;
+      else segments.push({ mix, start: i, end: i });
+    });
+
+    // Tanks that could be supplying each segment: those configured with its
+    // mix, or, when the dive has no tank setup, any tank with readings.
+    const tankCount = samples[0].tankPressureBar.length;
+    const hasReadings = (tank) => samples.some((s) => s.tankPressureBar[tank] !== null);
+    const allTanks = [...Array(tankCount).keys()];
+    const configured = (tank) => tanks && tanks[tank] && tanks[tank].o2Percent != null;
+    const candidatesFor = (mix) => {
+      const matching = allTanks.filter((tank) => configured(tank)
+        && sameMix(mix, { o2: tanks[tank].o2Percent, he: tanks[tank].hePercent || 0 }));
+      if (matching.length) return matching;
+      return allTanks.filter((tank) => !configured(tank) && hasReadings(tank));
+    };
+
+    // Runs of "which tank is active" across the dive, each tagged with its mix.
+    const runs = [];
+    segments.forEach((seg) => {
+      const candidates = candidatesFor(seg.mix);
+      let segRuns = candidates.length > 1 ? pressureRuns(samples, candidates, seg.start, seg.end) : [];
+      if (!segRuns.length) {
+        // One candidate, or no clear draw: take the tank that dropped the most.
+        let tank = candidates.length === 1 ? candidates[0] : null, bestDrop = 0;
+        if (candidates.length > 1) {
+          candidates.forEach((c) => {
+            const p = samples.slice(seg.start, seg.end + 1).map((s) => s.tankPressureBar[c]).filter((v) => v !== null);
+            if (p.length && p[0] - p[p.length - 1] > bestDrop) { bestDrop = p[0] - p[p.length - 1]; tank = c; }
+          });
+        }
+        segRuns = [{ tank, start: seg.start }];
+      }
+      segRuns[0].start = seg.start;
+      segRuns.forEach((r) => runs.push({ tank: r.tank, start: r.start, mix: seg.mix }));
+    });
+
+    const events = [];
+    for (let i = 1; i < runs.length; i++) {
+      const from = runs[i - 1], to = runs[i], index = to.start;
+      events.push({
+        t: samples[index].t, index,
+        fromTank: from.tank === null ? null : from.tank + 1, toTank: to.tank === null ? null : to.tank + 1,
+        fromMix: mixName(from.mix.o2, from.mix.he), toMix: mixName(to.mix.o2, to.mix.he),
+        inferred: sameMix(from.mix, to.mix),
+      });
+    }
+    return events;
+  }
+
+  // Infer which of the candidate tanks is being breathed over a stretch of the
+  // dive from pressure trends: the tank in use drops steadily while the others
+  // sit flat (aside from sensor noise). We scan a rolling window per tank
+  // looking for a sustained, consistent drop, pick whichever tank has the
+  // strongest such drop at each sample, and return runs of the "active tank".
+  function pressureRuns(samples, candidates, start, end) {
     const WINDOW = 6;             // ~12s at 2s sampling — long enough to separate a real draw from noise
     const NOISE_TOLERANCE = 0.3;  // bar; small upward blips within this are sensor noise, not a refill
     const MIN_DROP = 1.0;         // bar over the window; minimum drop to count as "in use"
     const MIN_RUN = 6;            // minimum consecutive samples agreeing on the active tank
 
-    const n = samples.length;
-    const tankCount = samples[0].tankPressureBar.length;
-    const pressure = Array.from({ length: tankCount }, (_, i) => samples.map((s) => s.tankPressureBar[i]));
+    const p = (tank, j) => samples[j].tankPressureBar[tank];
 
-    const dropping = Array.from({ length: tankCount }, () => new Array(n).fill(false));
-    const windowDrop = Array.from({ length: tankCount }, () => new Array(n).fill(0));
-
-    for (let tank = 0; tank < tankCount; tank++) {
-      const p = pressure[tank];
-      for (let j = 0; j + WINDOW < n; j++) {
-        let consistent = true;
-        for (let k = j; k < j + WINDOW; k++) {
-          const a = p[k], b = p[k + 1];
-          if (a === null || b === null || b - a > NOISE_TOLERANCE) { consistent = false; break; }
-        }
-        if (!consistent) continue;
-        const drop = p[j] - p[j + WINDOW];
-        windowDrop[tank][j] = drop;
-        dropping[tank][j] = drop >= MIN_DROP;
+    // Consistent drop over the window starting at j, or 0 if there isn't one.
+    function windowDrop(tank, j) {
+      for (let k = j; k < j + WINDOW; k++) {
+        const a = p(tank, k), b = p(tank, k + 1);
+        if (a === null || b === null || b - a > NOISE_TOLERANCE) return 0;
       }
+      const drop = p(tank, j) - p(tank, j + WINDOW);
+      return drop >= MIN_DROP ? drop : 0;
     }
 
-    // Pick the tank with the strongest consistent drop at each sample index.
-    const rawBest = new Array(n).fill(-1);
-    for (let j = 0; j < n; j++) {
-      let best = -1, bestDrop = 0;
-      for (let tank = 0; tank < tankCount; tank++) {
-        if (dropping[tank][j] && windowDrop[tank][j] > bestDrop) { best = tank; bestDrop = windowDrop[tank][j]; }
-      }
-      rawBest[j] = best;
-    }
-
-    // Collapse into runs of "which tank is active", ignoring indices with no clear answer.
+    // Collapse into runs of the strongest-dropping tank, ignoring indices with no clear answer.
     const runs = [];
-    for (let j = 0; j < n; j++) {
-      if (rawBest[j] === -1) continue;
+    for (let j = start; j + WINDOW <= end; j++) {
+      let best = -1, bestDrop = 0;
+      candidates.forEach((tank) => {
+        const drop = windowDrop(tank, j);
+        if (drop > bestDrop) { best = tank; bestDrop = drop; }
+      });
+      if (best === -1) continue;
       const last = runs[runs.length - 1];
-      if (last && last.tank === rawBest[j]) { last.end = j; last.len++; }
-      else runs.push({ tank: rawBest[j], start: j, end: j, len: 1 });
+      if (last && last.tank === best) { last.end = j; last.len++; }
+      else runs.push({ tank: best, start: j, end: j, len: 1 });
     }
 
     // Discard short runs (noise blips) by folding them into the previous run.
@@ -363,20 +411,20 @@
       if (last && last.tank === r.tank) last.end = r.end;
       else merged.push(r);
     });
+    return merged;
+  }
 
-    const events = [];
-    for (let i = 1; i < merged.length; i++) {
-      const index = merged[i].start;
-      events.push({ t: samples[index].t, index, fromTank: merged[i - 1].tank + 1, toTank: merged[i].tank + 1 });
-    }
-    return events;
+  // "EAN56 (D1) → EAN86 (D2)", falling back to the logged mix where the tank isn't known.
+  function switchText(e, tankLabels) {
+    const side = (tank, mix) => (tank ? tankLabels[tank - 1].full : mix);
+    return `Gas switch: ${side(e.fromTank, e.fromMix)} → ${side(e.toTank, e.toMix)}`;
   }
 
   // Split the dive into segments at each gas switch and collect the tank
   // pressures worth labelling: the active tank's pressure at the start of the
-  // dive, both tanks' pressures at every switch (old tank's end, new tank's
-  // start), and every tank's final pressure at the end of the dive.
-  function buildPressureLabels(samples, events, { includeSwitches }) {
+  // dive, both tanks' pressures at every shown switch (old tank's end, new
+  // tank's start), and every tank's final pressure at the end of the dive.
+  function buildPressureLabels(samples, events, { isShown }) {
     const n = samples.length;
     const tankCount = samples[0].tankPressureBar.length;
     const at = (tank, i) => samples[i].tankPressureBar[tank];
@@ -392,7 +440,7 @@
     }
 
     let firstTank;
-    if (events.length) {
+    if (events.length && events[0].fromTank) {
       firstTank = events[0].fromTank - 1;
     } else {
       // No switches: the active tank is whichever one dropped the most.
@@ -405,27 +453,21 @@
 
     const labels = [];
     const push = (tank, r, side) => {
-      if (r) labels.push({ tank, t: samples[r.index].t, v: r.v, side });
+      if (tank >= 0 && r) labels.push({ tank, t: samples[r.index].t, v: r.v, side });
     };
 
     if (firstTank !== undefined) push(firstTank, reading(firstTank, 0, 1), "right");
 
-    if (includeSwitches) {
-      events.forEach((e) => {
-        push(e.fromTank - 1, reading(e.fromTank - 1, Math.max(0, e.index - 1), -1), "left");
-        push(e.toTank - 1, reading(e.toTank - 1, e.index, 1), "right");
-      });
-    } else {
-      // Every tank other than the first gets its starting pressure labelled at
-      // the first switch onto it — the point where it's first used.
-      const labelled = new Set([firstTank]);
-      events.forEach((e) => {
-        const tank = e.toTank - 1;
-        if (labelled.has(tank)) return;
-        labelled.add(tank);
-        push(tank, reading(tank, e.index, 1), "right");
-      });
-    }
+    // A hidden switch still labels its new tank's starting pressure if that's
+    // the first time the tank is used, so every tank gets a starting label.
+    const labelled = new Set([firstTank]);
+    events.forEach((e) => {
+      const tank = e.toTank - 1;
+      if (isShown(e)) push(e.fromTank - 1, reading(e.fromTank - 1, Math.max(0, e.index - 1), -1), "left");
+      else if (labelled.has(tank)) return;
+      labelled.add(tank);
+      push(tank, reading(tank, e.index, 1), "right");
+    });
 
     for (let tank = 0; tank < tankCount; tank++) push(tank, reading(tank, n - 1, -1), "left");
 
@@ -498,7 +540,7 @@
   // slice of the plot (`band`: [top, bottom] as fractions of the plot height)
   // with their own value domain, so several units can share one chart. Anything
   // without a band uses the panel's own y-domain across the full height.
-  function drawPanel({ title, legendItems, height, width, xDomain, series, yDomain, yFmt, invertY, bands, markers, pointLabels, pointLabelScale, rightAxes, dividers, toggles, margin, peaks, refLines }) {
+  function drawPanel({ title, legendItems, height, width, xDomain, series, yDomain, yFmt, invertY, bands, markers, pointLabels, pointLabelScale, rightAxes, dividers, margin, peaks, refLines }) {
     const MARGIN = margin || DEFAULT_MARGIN;
     const w = width, h = height;
     const innerW = w - MARGIN.left - MARGIN.right;
@@ -518,42 +560,24 @@
     const titleSpan = document.createElement("span");
     titleSpan.textContent = title;
     titleRow.appendChild(titleSpan);
-    if ((legendItems && legendItems.length > 1) || (toggles && toggles.length)) {
-      const controls = document.createElement("div");
-      controls.className = "panel-controls";
-      if (legendItems && legendItems.length > 1) {
-        const legend = document.createElement("div");
-        legend.className = "legend";
-        legendItems.forEach((li) => {
-          const key = document.createElement("span");
-          key.className = "key";
-          const sw = document.createElement("span");
-          sw.className = "swatch";
-          sw.style.background = li.dashed
-            ? `repeating-linear-gradient(90deg, ${li.color} 0 4px, transparent 4px 7px)`
-            : li.color;
-          const label = document.createElement("span");
-          label.textContent = li.name;
-          key.appendChild(sw);
-          key.appendChild(label);
-          legend.appendChild(key);
-        });
-        controls.appendChild(legend);
-      }
-      (toggles || []).forEach((toggle) => {
-        const toggleLabel = document.createElement("label");
-        toggleLabel.className = "panel-toggle";
-        const checkbox = document.createElement("input");
-        checkbox.type = "checkbox";
-        checkbox.checked = toggle.checked;
-        checkbox.addEventListener("change", () => toggle.onChange(checkbox.checked));
-        const text = document.createElement("span");
-        text.textContent = toggle.label;
-        toggleLabel.appendChild(checkbox);
-        toggleLabel.appendChild(text);
-        controls.appendChild(toggleLabel);
+    if (legendItems && legendItems.length > 1) {
+      const legend = document.createElement("div");
+      legend.className = "legend";
+      legendItems.forEach((li) => {
+        const key = document.createElement("span");
+        key.className = "key";
+        const sw = document.createElement("span");
+        sw.className = "swatch";
+        sw.style.background = li.dashed
+          ? `repeating-linear-gradient(90deg, ${li.color} 0 4px, transparent 4px 7px)`
+          : li.color;
+        const label = document.createElement("span");
+        label.textContent = li.name;
+        key.appendChild(sw);
+        key.appendChild(label);
+        legend.appendChild(key);
       });
-      titleRow.appendChild(controls);
+      titleRow.appendChild(legend);
     }
     panelDiv.appendChild(titleRow);
 
@@ -562,6 +586,7 @@
       style: `width:100%; height:${h}px; display:block;`,
     });
     panelDiv.appendChild(svg);
+
     stackEl.appendChild(panelDiv);
 
     const xScale = makeScale(xDomain, [MARGIN.left, MARGIN.left + innerW]);
@@ -736,6 +761,27 @@
     stackEl.appendChild(wrap);
   }
 
+  // Display toggles, in one row under the time axis, clear of the legends.
+  function drawToggles(toggles) {
+    if (!toggles.length) return;
+    const controls = document.createElement("div");
+    controls.className = "panel-controls";
+    toggles.forEach((toggle) => {
+      const toggleLabel = document.createElement("label");
+      toggleLabel.className = "panel-toggle";
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = toggle.checked;
+      checkbox.addEventListener("change", () => toggle.onChange(checkbox.checked));
+      const text = document.createElement("span");
+      text.textContent = toggle.label;
+      toggleLabel.appendChild(checkbox);
+      toggleLabel.appendChild(text);
+      controls.appendChild(toggleLabel);
+    });
+    stackEl.appendChild(controls);
+  }
+
   function setupCrosshair(samples, width, xDomain, gasSwitchEvents, colors, tankLabels, showMod) {
     const MARGIN = panels[0].margin;
     stackEl.style.position = "relative";
@@ -843,8 +889,7 @@
         row.className = "t-row";
         const valSpan = document.createElement("span");
         valSpan.className = "t-val";
-        const from = tankLabels[nearestSwitch.e.fromTank - 1], to = tankLabels[nearestSwitch.e.toTank - 1];
-        valSpan.textContent = `Gas switch: ${from.full} → ${to.full}`;
+        valSpan.textContent = switchText(nearestSwitch.e, tankLabels);
         row.appendChild(valSpan);
         tooltip.appendChild(row);
       }
@@ -873,10 +918,11 @@
     const fixed = (dp) => (v) => (blank(v) ? "–" : v.toFixed(dp));
 
     // Which tank is being breathed at each sample, from the detected gas switches.
-    const firstTank = gasSwitchEvents.length ? gasSwitchEvents[0].fromTank - 1 : null;
+    const tankIndex = (n) => (n ? n - 1 : null);
+    const firstTank = gasSwitchEvents.length ? tankIndex(gasSwitchEvents[0].fromTank) : null;
     const activeTank = (index) => {
       let tank = firstTank;
-      gasSwitchEvents.forEach((e) => { if (e.index <= index) tank = e.toTank - 1; });
+      gasSwitchEvents.forEach((e) => { if (e.index <= index) tank = tankIndex(e.toTank); });
       return tank;
     };
 
@@ -946,8 +992,7 @@
       tr.className = "switch-row";
       const td = document.createElement("td");
       td.colSpan = cols.length;
-      const from = tankLabels[e.fromTank - 1].full, to = tankLabels[e.toTank - 1].full;
-      td.textContent = `${fmtTime(e.t)} · Gas switch: ${from} → ${to}`;
+      td.textContent = `${fmtTime(e.t)} · ${switchText(e, tankLabels)}`;
       tr.appendChild(td);
       tbody.appendChild(tr);
     };
@@ -1046,8 +1091,12 @@
     });
 
     const xDomain = [samples[0].t, samples[samples.length - 1].t];
-    const gasSwitchEvents = detectGasSwitches(samples);
-    let showGasSwitches = true;
+    const gasSwitchEvents = detectGasSwitches(samples, dive.tanks);
+    // Switches the computer recorded (a change of logged mix) always show;
+    // switches inferred from pressure only show when toggled on.
+    let showInferredSwitches = true;
+    const isShownSwitch = (e) => showInferredSwitches || !e.inferred;
+    const shownSwitches = () => gasSwitchEvents.filter(isShownSwitch);
     let showMod = true;
     try { if (localStorage.getItem("divelog.showMod") === "false") showMod = false; } catch (e) {}
 
@@ -1131,13 +1180,14 @@
     const endGf99Marker = dive.endGf99 != null && {
       t: surfacing.t, v: surfacing.depth, color: COLORS.depth, align: "start", text: `SurfGF ${dive.endGf99}%`,
     };
-    const gasSwitchToggle = () => ({
-      label: "Show gas switches",
-      checked: showGasSwitches,
-      onChange: (checked) => { showGasSwitches = checked; renderCharts(); },
+    // Only offered when there are inferred switches to hide.
+    const gasSwitchToggle = () => gasSwitchEvents.some((e) => e.inferred) && ({
+      label: "Show inferred gas switches",
+      checked: showInferredSwitches,
+      onChange: (checked) => { showInferredSwitches = checked; renderCharts(); },
     });
     const pressureLabelsFor = () =>
-      buildPressureLabels(samples, gasSwitchEvents, { includeSwitches: showGasSwitches })
+      buildPressureLabels(samples, gasSwitchEvents, { isShown: isShownSwitch })
         .map((l) => ({ ...l, color: COLORS.tanks[l.tank], text: `${Math.round(l.v)} bar` }));
 
     function renderSeparate(width) {
@@ -1155,7 +1205,6 @@
         bands: showMod ? [decoBand, modBand] : [decoBand],
         peaks: [maxDepthPeak, endGf99Marker, showMod && overLimitPeak].filter(Boolean),
         series: showMod ? [depthSeries, overLimitSeries] : [depthSeries],
-        toggles: [modToggle()],
       });
 
       // Tank pressure panel (only tanks that have any data; none without air integration)
@@ -1172,9 +1221,8 @@
           yDomain: [0, tankMax],
           yFmt: (v) => Math.round(v) + " bar",
           series: tankSeries,
-          markers: showGasSwitches ? gasSwitchEvents : [],
+          markers: shownSwitches(),
           pointLabels: pressureLabelsFor(),
-          toggles: [gasSwitchToggle()],
         });
       }
 
@@ -1202,7 +1250,8 @@
       });
 
       drawXAxis(width, xDomain);
-      setupCrosshair(samples, width, xDomain, showGasSwitches ? gasSwitchEvents : [], COLORS, tankLabels, showMod);
+      drawToggles([tanksInUse.length && gasSwitchToggle(), modToggle()].filter(Boolean));
+      setupCrosshair(samples, width, xDomain, shownSwitches(), COLORS, tankLabels, showMod);
     }
 
     // One tall chart on the depth axis. Tank pressure is squeezed into the
@@ -1244,14 +1293,14 @@
           { ...ppo2Scale, ticks: 3, fmt: (v) => v.toFixed(1) + " atm" },
           { ...tempScale, ticks: 3, fmt: (v) => v.toFixed(0) + "°C" },
         ],
-        markers: showGasSwitches ? gasSwitchEvents : [],
+        markers: shownSwitches(),
         pointLabels: pressureLabelsFor(),
         pointLabelScale: pressureScale,
-        toggles: [gasSwitchToggle(), modToggle()],
       });
 
       drawXAxis(width, xDomain, COMBINED_MARGIN);
-      setupCrosshair(samples, width, xDomain, showGasSwitches ? gasSwitchEvents : [], COLORS, tankLabels, showMod);
+      drawToggles([gasSwitchToggle(), modToggle()].filter(Boolean));
+      setupCrosshair(samples, width, xDomain, shownSwitches(), COLORS, tankLabels, showMod);
     }
 
     function renderCharts() {
