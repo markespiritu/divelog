@@ -108,11 +108,15 @@
   /* Above the crosshair's pointer-capture layer, which spans the whole chart stack. */
   /* The toggles double as the legend: line toggles carry their series' swatch. */
   .panel-controls { position: relative; z-index: 2; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 16px; margin: 4px 0 4px; }
+  /* One column per group when there's room (sized to the longest label, so
+     none wrap), two on narrower screens, one on a phone. */
   .toggle-grid {
-    position: relative; z-index: 2; display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    position: relative; z-index: 2; display: grid; grid-template-columns: 1fr;
     gap: 12px 24px; margin: 0 0 12px; padding: 12px 16px;
     background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
   }
+  @media (min-width: 600px) { .toggle-grid { grid-template-columns: repeat(2, minmax(max-content, 1fr)); } }
+  @media (min-width: 1000px) { .toggle-grid { grid-template-columns: repeat(var(--cols, 4), minmax(max-content, 1fr)); } }
   .toggle-group + .toggle-group { margin-top: 12px; }
   .toggle-group h3 { margin: 0 0 6px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-muted); }
   .toggle-group .panel-toggle { padding: 2px 0; }
@@ -798,6 +802,7 @@
   function drawToggleGrid(columns) {
     const grid = document.createElement("div");
     grid.className = "toggle-grid";
+    grid.style.setProperty("--cols", columns.length);
     columns.forEach((groups) => {
       const col = document.createElement("div");
       groups.forEach(({ title, toggles }) => {
@@ -1424,11 +1429,12 @@
       });
 
       drawXAxis(width, xDomain, COMBINED_MARGIN);
-      // Three columns: depth, tanks, then PPO2 over temperature.
+      // One column per group: depth, tanks, PPO2, temperature.
       drawToggleGrid([
         [{ title: "Depth", toggles: depthToggles() }],
         tanksInUse.length && [{ title: "Tanks", toggles: tankToggles() }],
-        [{ title: "PPO2", toggles: ppo2Toggles() }, { title: "Temperature", toggles: tempToggles(true) }],
+        [{ title: "PPO2", toggles: ppo2Toggles() }],
+        [{ title: "Temperature", toggles: tempToggles(true) }],
       ].filter(Boolean));
       setupCrosshair(samples, width, xDomain, shownSwitches(), COLORS, tankLabels, vis);
     }
