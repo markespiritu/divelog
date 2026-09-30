@@ -1561,15 +1561,39 @@
 
     // One tall chart on the depth axis, which runs on past the deepest point
     // (e.g. to 50 m for a 44 m dive) so the profile mostly clears the bottom
-    // slices. Tank pressure takes the middle; PPO2, ascent rate and water
-    // temperature split what's left below it. Hidden lines keep their slice
-    // and axis, so the rest doesn't move.
+    // slices. Tank pressure sits so that 200 bar lines up with 10 m; PPO2,
+    // ascent rate and water temperature stack below it, and the chart is as
+    // tall as that stack needs. Hidden lines keep their slice and axis, so the
+    // rest doesn't move.
     const combinedDepthMax = Math.ceil((deepest.depth + 5) / 10) * 10;
+    // Slice heights in px of plot area.
+    const COMBINED_SLICES = { pressure: 280, gap: 22, ppo2: 66, ascent: 77, temp: 85 };
+    function combinedLayout() {
+      const { pressure, gap, ppo2, ascent, temp } = COMBINED_SLICES;
+      const below200 = pressure * 200 / tankMax;
+      // 10 m sits at 10 / depthMax of the plot height, and everything from
+      // there down is fixed, which pins the plot height.
+      const innerH = (below200 + 3 * gap + ppo2 + ascent + temp) / (1 - 10 / combinedDepthMax);
+      const f = (px) => px / innerH;
+      const pressureBottom = 10 / combinedDepthMax + f(below200);
+      const ppo2Top = pressureBottom + f(gap);
+      const ascentTop = ppo2Top + f(ppo2 + gap);
+      const tempTop = ascentTop + f(ascent + gap);
+      return {
+        height: Math.round(innerH) + COMBINED_MARGIN.top + COMBINED_MARGIN.bottom,
+        pressure: [pressureBottom - f(pressure), pressureBottom],
+        ppo2: [ppo2Top, ppo2Top + f(ppo2)],
+        ascent: [ascentTop, ascentTop + f(ascent)],
+        temp: [tempTop, 1],
+        dividers: [pressureBottom - f(pressure), ppo2Top - f(gap / 2), ascentTop - f(gap / 2), tempTop - f(gap / 2)],
+      };
+    }
     function renderCombined(width) {
-      const pressureScale = { domain: [0, tankMax], band: [0.22, 0.6] };
-      const ppo2Scale = { domain: ppo2Domain, band: [0.63, 0.72] };
-      const ascentScale = { domain: ascentDomain(), band: [0.75, 0.855] };
-      const tempScale = { domain: tempDomain, band: [0.885, 1] };
+      const layout = combinedLayout();
+      const pressureScale = { domain: [0, tankMax], band: layout.pressure };
+      const ppo2Scale = { domain: ppo2Domain, band: layout.ppo2 };
+      const ascentScale = { domain: ascentDomain(), band: layout.ascent };
+      const tempScale = { domain: tempDomain, band: layout.temp };
 
       const series = [
         ...shownTanks().map((i) => ({
@@ -1586,7 +1610,7 @@
 
       drawPanel({
         title: "Dive profile",
-        height: Math.round(DEPTH_HEIGHT * 3.25),
+        height: layout.height,
         width,
         margin: COMBINED_MARGIN,
         xDomain,
@@ -1597,7 +1621,7 @@
         peaks: [...depthPeaks(), ...ppo2Peaks(ppo2Scale), ...ascentPeaks(ascentScale), ...tempPeaks(tempScale)],
         series,
         refLines: [...ppo2RefLines(ppo2Scale), ascentZeroLine(ascentScale)],
-        dividers: [0.22, 0.615, 0.735, 0.87],
+        dividers: layout.dividers,
         rightAxes: [
           { ...pressureScale, ticks: 4, fmt: (v) => Math.round(v) + " bar" },
           { ...ppo2Scale, ticks: 3, fmt: (v) => v.toFixed(1) + " atm" },
