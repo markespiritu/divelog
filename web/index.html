@@ -1137,8 +1137,10 @@
       tanks: ["var(--series-1)", "var(--series-2)", "var(--series-4)", "var(--series-3)"],
     };
     const tanksInUse = [0, 1, 2, 3].filter((i) => samples.some((s) => s.tankPressureBar[i] !== null));
+    // Deco ceiling and MOD are both limits not to cross, so their bands share one look.
+    const LIMIT_BAND = { color: "var(--status-critical)", opacity: 0.12, outline: true };
     // Deco ceiling, shaded up to the surface. Stepped at each change of stop depth.
-    const decoBand = { points: [], base: 0, color: "var(--status-critical)", opacity: 0.16, outline: true };
+    const decoBand = { ...LIMIT_BAND, points: [], base: 0 };
     samples.forEach((s, i) => {
       const v = s.firstStopDepth || 0;
       const prev = decoBand.points[decoBand.points.length - 1];
@@ -1170,7 +1172,7 @@
     const limitLegendItems = () => [showCeiling && ceilingLegendItem, showMod && modLegendItem].filter(Boolean);
     // MOD of the gas being breathed, shaded from there to the bottom of the
     // chart. Stepped at each change of mix; deeper than the chart means no band.
-    const modBand = { points: [], base: depthMax, color: "var(--status-critical)", opacity: 0.08, outline: true };
+    const modBand = { ...LIMIT_BAND, points: [], base: depthMax };
     samples.forEach((s, i) => {
       const v = Math.min(modDepthM(s.fractionO2), depthMax);
       const prev = modBand.points[modBand.points.length - 1];
