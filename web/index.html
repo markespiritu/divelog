@@ -1290,9 +1290,9 @@
       visToggle("Depth", "depth", { swatch: { color: COLORS.depth } }),
       visToggle("Show deco ceiling (CEIL)", "ceiling", { swatch: LIMIT_SWATCH }),
       visToggle("Show maximum operating depth (MOD)", "mod", { swatch: LIMIT_SWATCH }),
-      visToggle("Highlight exceeded limits", "depthHighlight", { disabled: !vis.depth || !(vis.ceiling || vis.mod) }),
       visToggle("Show maximum depth", "maxDepth", { disabled: !vis.depth }),
       visToggle("Show surface gradient factor (SurfGF)", "surfGf", { disabled: !vis.depth }),
+      visToggle("Highlight exceeded limits", "depthHighlight", { disabled: !vis.depth || !(vis.ceiling || vis.mod) }),
     ];
     const tankToggles = () => [
       ...tanksInUse.map((i) => visToggle(tankLabels[i].full, "tanks", { tank: i, swatch: { color: COLORS.tanks[i] } })),
