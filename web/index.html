@@ -22,6 +22,7 @@
     --series-3:       #1baf7a; /* aqua   */
     --series-4:       #eda100; /* yellow */
     --series-5:       #8a4fd6; /* violet */
+    --series-6:       #e87ba4; /* magenta */
     --status-critical:#d03b3b;
     --status-good:    #0ca30c;
     --seq-100:        #cde2fb;
@@ -43,6 +44,7 @@
       --series-3:       #199e70;
       --series-4:       #c98500;
       --series-5:       #a078ec;
+      --series-6:       #d55181;
       --status-critical:#e66767;
       --status-good:    #0ca30c;
       --seq-100:        #184f95;
@@ -66,6 +68,7 @@
     --series-3:       #199e70;
     --series-4:       #c98500;
     --series-5:       #a078ec;
+    --series-6:       #d55181;
     --status-critical:#e66767;
     --status-good:    #0ca30c;
     --seq-100:        #184f95;
@@ -108,15 +111,13 @@
   /* Above the crosshair's pointer-capture layer, which spans the whole chart stack. */
   /* The toggles double as the legend: line toggles carry their series' swatch. */
   .panel-controls { position: relative; z-index: 2; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 16px; margin: 4px 0 4px; }
-  /* One column per group when there's room (sized to the longest label, so
-     none wrap), two on narrower screens, one on a phone. */
+  /* As many equal columns as fit without wrapping a label, set in drawToggleGrid;
+     groups that don't fit wrap onto rows aligned with the ones above. */
   .toggle-grid {
-    position: relative; z-index: 2; display: grid; grid-template-columns: 1fr;
-    gap: 12px 24px; margin: 0 0 12px; padding: 12px 16px;
+    position: relative; z-index: 2; display: grid; grid-template-columns: minmax(0, 1fr);
+    gap: 12px 20px; margin: 0 0 12px; padding: 12px 16px;
     background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
   }
-  @media (min-width: 600px) { .toggle-grid { grid-template-columns: repeat(2, minmax(max-content, 1fr)); } }
-  @media (min-width: 1000px) { .toggle-grid { grid-template-columns: repeat(var(--cols, 4), minmax(max-content, 1fr)); } }
   .toggle-group + .toggle-group { margin-top: 12px; }
   .toggle-group h3 { margin: 0 0 6px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-muted); }
   .toggle-group .panel-toggle { padding: 2px 0; }
@@ -124,6 +125,13 @@
   .panel-toggle input { cursor: pointer; margin: 0; }
   .panel-toggle.disabled { opacity: 0.5; cursor: default; }
   .panel-toggle.disabled input { cursor: default; }
+  .panel-choice { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; color: var(--text-secondary); }
+  .panel-choice.disabled > span { opacity: 0.5; }
+  .panel-choice .swatch { width: 14px; height: 2px; flex: none; }
+  .panel-choice.stacked { align-items: flex-start; gap: 6px; flex-wrap: nowrap; padding: 2px 0; }
+  .panel-choice.stacked .ghost { visibility: hidden; margin: 0; }
+  .panel-choice.stacked .swatch { align-self: center; visibility: hidden; }
+  .panel-choice .choice-options { display: flex; gap: 10px; margin-top: 4px; }
   .panel-toggle .swatch { width: 14px; height: 2px; border-radius: 2px; flex: none; }
   .gas-switch-tag { fill: var(--text-secondary); font-size: 9px; }
 
@@ -761,13 +769,15 @@
     stackEl.appendChild(wrap);
   }
 
-  // One display toggle: { id, label, checked, onChange, swatch?: { color, dashed }, disabled? }.
+  // One display toggle: { id, label, checked, onChange, swatch?: { color, dashed }, disabled?, title? }.
   // A swatch shows the line or band it controls, so the toggles double as the legend.
   // `spacer` keeps swatch-less labels lined up under the swatched ones in a column.
   function toggleEl(toggle, { spacer } = {}) {
+    if (toggle.options) return choiceEl(toggle, { spacer });
     const toggleLabel = document.createElement("label");
     toggleLabel.className = "panel-toggle" + (toggle.disabled ? " disabled" : "");
     toggleLabel.dataset.toggle = toggle.id;
+    if (toggle.title) toggleLabel.title = toggle.title;
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.checked = toggle.checked;
@@ -789,6 +799,57 @@
     return toggleLabel;
   }
 
+  // A set of radio buttons in place of a toggle:
+  // { id, label, options: [{ value, label }], value, onChange, disabled? }.
+  // Each option is its own .panel-toggle so focus survives a redraw. In a
+  // legend column (`spacer`), the label and options stack, lined up with the
+  // toggle labels above, to keep the column narrow.
+  function choiceEl(choice, { spacer } = {}) {
+    const row = document.createElement("div");
+    row.className = "panel-choice" + (choice.disabled ? " disabled" : "") + (spacer ? " stacked" : "");
+    row.setAttribute("role", "radiogroup");
+    row.setAttribute("aria-label", choice.label);
+    let body = row;
+    if (spacer) {
+      // An invisible checkbox and swatch take the same room as a toggle's.
+      const ghost = document.createElement("input");
+      ghost.type = "checkbox";
+      ghost.className = "ghost";
+      ghost.tabIndex = -1;
+      ghost.setAttribute("aria-hidden", "true");
+      row.appendChild(ghost);
+      const sw = document.createElement("span");
+      sw.className = "swatch";
+      row.appendChild(sw);
+      body = document.createElement("div");
+      body.className = "choice-body";
+      row.appendChild(body);
+    }
+    const text = document.createElement("span");
+    text.textContent = choice.label;
+    body.appendChild(text);
+    const options = spacer ? document.createElement("div") : body;
+    if (spacer) {
+      options.className = "choice-options";
+      body.appendChild(options);
+    }
+    choice.options.forEach((opt) => {
+      const optLabel = document.createElement("label");
+      optLabel.className = "panel-toggle" + (choice.disabled ? " disabled" : "");
+      optLabel.dataset.toggle = `${choice.id}-${opt.value}`;
+      const radio = document.createElement("input");
+      radio.type = "radio";
+      radio.name = choice.id;
+      radio.checked = opt.value === choice.value;
+      radio.disabled = !!choice.disabled;
+      radio.addEventListener("change", () => { if (radio.checked) choice.onChange(opt.value); });
+      optLabel.appendChild(radio);
+      optLabel.appendChild(document.createTextNode(opt.label));
+      options.appendChild(optLabel);
+    });
+    return row;
+  }
+
   // A row of toggles, placed under the chart they control in the Separate view.
   function toggleRow(toggles) {
     const controls = document.createElement("div");
@@ -797,30 +858,58 @@
     return controls;
   }
 
-  // Grouped toggles under the combined chart: `columns` is a list of columns,
-  // each a list of { title, toggles } groups stacked top to bottom.
-  function drawToggleGrid(columns) {
+  // Grouped toggles under the combined chart. `layouts` lists arrangements to
+  // try, widest first: each a list of columns, each a list of { title, toggles }
+  // groups stacked top to bottom.
+  function drawToggleGrid(layouts) {
     const grid = document.createElement("div");
     grid.className = "toggle-grid";
-    grid.style.setProperty("--cols", columns.length);
-    columns.forEach((groups) => {
-      const col = document.createElement("div");
-      groups.forEach(({ title, toggles }) => {
-        const group = document.createElement("div");
-        group.className = "toggle-group";
-        const heading = document.createElement("h3");
-        heading.textContent = title;
-        group.appendChild(heading);
-        toggles.forEach((toggle) => group.appendChild(toggleEl(toggle, { spacer: true })));
-        col.appendChild(group);
-      });
-      grid.appendChild(col);
-    });
     stackEl.appendChild(grid);
+    const style = getComputedStyle(grid);
+    const room = grid.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    const gap = parseFloat(style.columnGap);
+
+    // Lay out one arrangement of the groups; returns its columns' natural widths.
+    function build(columns) {
+      grid.innerHTML = "";
+      columns.forEach((groups) => {
+        const col = document.createElement("div");
+        col.style.width = "max-content";
+        groups.forEach(({ title, toggles }) => {
+          const group = document.createElement("div");
+          group.className = "toggle-group";
+          const heading = document.createElement("h3");
+          heading.textContent = title;
+          group.appendChild(heading);
+          toggles.forEach((toggle) => group.appendChild(toggleEl(toggle, { spacer: true })));
+          col.appendChild(group);
+        });
+        grid.appendChild(col);
+      });
+      const cols = [...grid.children];
+      const widths = cols.map((col) => col.getBoundingClientRect().width);
+      cols.forEach((col) => { col.style.width = ""; });
+      return widths;
+    }
+    const fits = (widest, n) => widest * n + gap * (n - 1) <= room;
+
+    // The first arrangement whose columns all fit on one row of equal-width
+    // columns, each as wide as the widest group. Failing that, the last one,
+    // wrapped onto as many columns as fit; a single column (on a phone) lets
+    // long labels wrap instead.
+    let n;
+    for (const [i, columns] of layouts.entries()) {
+      const widest = Math.max(...build(columns));
+      n = columns.length;
+      if (fits(widest, n)) break;
+      if (i === layouts.length - 1) while (n > 1 && !fits(widest, n)) n--;
+    }
+    grid.style.gridTemplateColumns = n > 1 ? `repeat(${n}, minmax(0, 1fr))` : "";
   }
 
   // `vis` is the display toggles: the tooltip leaves out whatever is switched off.
-  function setupCrosshair(samples, width, xDomain, gasSwitchEvents, colors, tankLabels, vis) {
+  // `ascentRates` is the smoothed ascent rate per sample (m/min, ascending positive).
+  function setupCrosshair(samples, width, xDomain, gasSwitchEvents, colors, tankLabels, vis, ascentRates) {
     const MARGIN = panels[0].margin;
     stackEl.style.position = "relative";
     const overlay = svgEl("svg", { width, height: 2, style: "position:absolute; top:0; left:0; pointer-events:none;" });
@@ -895,6 +984,10 @@
         ]] : []),
         ["NDL", s.ndlMin, "min", "var(--text-muted)"],
         ...(vis.ppo2 ? [["PPO2", s.ppo2, "atm", colors.ppo2]] : []),
+        ...(vis.ascent && ascentRates[idx] !== null ? [[
+          ascentRates[idx] < 0 ? "Descent rate" : "Ascent rate",
+          Math.abs(ascentRates[idx]).toFixed(1), "m/min", colors.ascent,
+        ]] : []),
         ...(vis.temp ? [["Temp", s.waterTempC, "°C", colors.temp]] : []),
         ...s.tankPressureBar.map((v, i) => [tankLabels[i].full, vis.tanks[i] ? v : null, "bar", colors.tanks[i]]),
       ];
@@ -1141,6 +1234,7 @@
       depth: true, ceiling: true, mod: true, depthHighlight: true, maxDepth: true, surfGf: true,
       tanks: [true, true, true, true], inferredSwitches: true,
       ppo2: true, highlight: true,
+      ascent: true, maxAscent: true,
       temp: true, startTemp: true, minTemp: true,
     };
     try {
@@ -1156,9 +1250,10 @@
       });
     } catch (e) {}
     // A toggle for one of the flags in `vis`; `tank` picks a slot of vis.tanks.
-    function visToggle(label, key, { swatch, disabled, tank } = {}) {
+    // `title` is the full description, shown on hover beside the short label.
+    function visToggle(label, key, { swatch, disabled, tank, title } = {}) {
       return {
-        id: tank === undefined ? key : `tank${tank}`, label, swatch, disabled,
+        id: tank === undefined ? key : `tank${tank}`, label, swatch, disabled, title,
         checked: tank === undefined ? vis[key] : vis.tanks[tank],
         onChange: (checked) => {
           if (tank === undefined) vis[key] = checked; else vis.tanks[tank] = checked;
@@ -1167,6 +1262,13 @@
         },
       };
     }
+    // Ascent rate smoothing window in seconds, remembered separately from the on/off toggles.
+    const ASCENT_WINDOWS = [2, 4, 10];
+    let ascentWindow = 10;
+    try {
+      const saved = Number(localStorage.getItem("divelog.ascentWindow"));
+      if (ASCENT_WINDOWS.includes(saved)) ascentWindow = saved;
+    } catch (e) {}
     const isShownSwitch = (e) => vis.inferredSwitches || !e.inferred;
     const shownSwitches = () => gasSwitchEvents.filter(isShownSwitch);
 
@@ -1198,6 +1300,7 @@
     const COLORS = {
       depth: "var(--depth-line)",
       ppo2: "var(--series-5)",
+      ascent: "var(--series-6)",
       temp: "var(--text-muted)",
       tanks: ["var(--series-1)", "var(--series-2)", "var(--series-4)", "var(--series-3)"],
     };
@@ -1223,20 +1326,24 @@
       })),
     };
     // MOD of the gas being breathed, shaded from there to the bottom of the
-    // chart. Stepped at each change of mix; deeper than the chart means no band.
-    const modBand = { ...LIMIT_BAND, points: [], base: depthMax };
-    samples.forEach((s, i) => {
-      const v = Math.min(modDepthM(s.fractionO2), depthMax);
-      const prev = modBand.points[modBand.points.length - 1];
-      if (i && prev.v !== v) modBand.points.push({ t: s.t, v: prev.v });
-      modBand.points.push({ t: s.t, v });
-    });
+    // chart (`bottom`, in m). Stepped at each change of mix; deeper than the
+    // chart means no band.
+    function modBandTo(bottom) {
+      const band = { ...LIMIT_BAND, points: [], base: bottom };
+      samples.forEach((s, i) => {
+        const v = Math.min(modDepthM(s.fractionO2), bottom);
+        const prev = band.points[band.points.length - 1];
+        if (i && prev.v !== v) band.points.push({ t: s.t, v: prev.v });
+        band.points.push({ t: s.t, v });
+      });
+      return band;
+    }
     // Depth wherever the logged PPO2 is over the limit, drawn in red over the profile.
     const overLimitSeries = {
       name: "Over MOD", color: "var(--status-critical)", width: 2.5,
       points: samples.map((s) => ({ t: s.t, v: s.ppo2 > MOD_PPO2 ? s.depth : null })),
     };
-    const depthBands = () => [vis.ceiling && decoBand, vis.mod && modBand].filter(Boolean);
+    const depthBands = (bottom) => [vis.ceiling && decoBand, vis.mod && modBandTo(bottom)].filter(Boolean);
     // The red breaches on the depth profile, each shown with the limit it crosses.
     const limitOverlays = () => (vis.depthHighlight
       ? [vis.mod && overLimitSeries, vis.ceiling && overCeilingSeries].filter(Boolean)
@@ -1268,6 +1375,48 @@
       vis.minTemp && { t: coldest.t, v: coldest.waterTempC, scale, color: COLORS.temp, align: "start", above: true,
         text: `Min ${coldest.waterTempC.toFixed(0)}°C` },
     ].filter(Boolean) : []);
+    // Ascent rate in m/min (ascending positive), from the depth change across a
+    // window of `ascentWindow` seconds centred on each sample. Shorter windows
+    // show brief spikes; longer ones the sustained rate. Cached per window.
+    const ascentCache = {};
+    function ascentRates() {
+      if (ascentCache[ascentWindow]) return ascentCache[ascentWindow];
+      const interval = samples.length > 1 ? samples[1].t - samples[0].t : 2;
+      const steps = Math.max(1, Math.round(ascentWindow / interval));
+      const rates = samples.map((s, i) => {
+        const a = Math.max(0, i - Math.floor(steps / 2));
+        const b = Math.min(samples.length - 1, a + steps);
+        const from = samples[a], to = samples[b];
+        if (b <= a || from.depth == null || to.depth == null) return null;
+        return ((from.depth - to.depth) / (to.t - from.t)) * 60;
+      });
+      return (ascentCache[ascentWindow] = rates);
+    }
+    // Symmetric about zero isn't needed: each side rounds up to the next 5 m/min.
+    function ascentDomain() {
+      const rates = ascentRates().filter((v) => v !== null);
+      const up = Math.max(5, Math.ceil(Math.max(...rates) / 5) * 5);
+      const down = Math.max(5, Math.ceil(-Math.min(...rates) / 5) * 5);
+      return [-down, up];
+    }
+    const ascentSeries = (scale) => (vis.ascent ? [{
+      name: "Ascent rate", color: COLORS.ascent, points: samples.map((s, i) => ({ t: s.t, v: ascentRates()[i] })), ...scale,
+    }] : []);
+    // The fastest ascent, labelled to the left of its point.
+    function ascentPeaks(scale) {
+      if (!vis.ascent || !vis.maxAscent) return [];
+      const rates = ascentRates();
+      let best = 0;
+      rates.forEach((v, i) => { if (v !== null && v > rates[best]) best = i; });
+      if (!(rates[best] > 0)) return [];
+      return [{
+        t: samples[best].t, v: rates[best], scale, color: COLORS.ascent, beside: true,
+        text: `Max ascent ${rates[best].toFixed(1)} m/min`,
+      }];
+    }
+    // The zero line splits ascent (above) from descent (below) in the combined
+    // chart, where the banded scale has no gridlines of its own.
+    const ascentZeroLine = (scale) => ({ v: 0, scale, color: "var(--baseline)" });
     const deepest = samples.reduce((a, b) => ((b.depth || 0) > (a.depth || 0) ? b : a));
     const maxDepthPeak = {
       t: deepest.t, v: deepest.depth, color: COLORS.depth, text: `Max ${deepest.depth.toFixed(1)} m`,
@@ -1293,26 +1442,39 @@
     const LIMIT_SWATCH = { color: "var(--status-critical)", dashed: true };
     const depthToggles = () => [
       visToggle("Depth", "depth", { swatch: { color: COLORS.depth } }),
-      visToggle("Show deco ceiling (CEIL)", "ceiling", { swatch: LIMIT_SWATCH }),
-      visToggle("Show maximum operating depth (MOD)", "mod", { swatch: LIMIT_SWATCH }),
-      visToggle("Show maximum depth", "maxDepth", { disabled: !vis.depth }),
-      visToggle("Show surface gradient factor (SurfGF)", "surfGf", { disabled: !vis.depth }),
+      visToggle("Deco ceiling", "ceiling", { swatch: LIMIT_SWATCH, title: "Deco ceiling (CEIL)" }),
+      visToggle("MOD", "mod", { swatch: LIMIT_SWATCH, title: `Maximum operating depth at PPO2 ${MOD_PPO2}` }),
+      visToggle("Max depth", "maxDepth", { disabled: !vis.depth, title: "Label the maximum depth" }),
+      visToggle("SurfGF", "surfGf", { disabled: !vis.depth, title: "Label the surface gradient factor on surfacing" }),
       visToggle("Highlight exceeded limits", "depthHighlight", { disabled: !vis.depth || !(vis.ceiling || vis.mod) }),
     ];
     const tankToggles = () => [
       ...tanksInUse.map((i) => visToggle(tankLabels[i].full, "tanks", { tank: i, swatch: { color: COLORS.tanks[i] } })),
       // Only offered when there are inferred switches to hide.
-      ...(gasSwitchEvents.some((e) => e.inferred) ? [visToggle("Show inferred gas switches", "inferredSwitches")] : []),
+      ...(gasSwitchEvents.some((e) => e.inferred) ? [visToggle("Inferred gas switches", "inferredSwitches", { title: "Switches between tanks of the same mix, inferred from tank pressures" })] : []),
     ];
     const ppo2Toggles = () => [
       visToggle("PPO2", "ppo2", { swatch: { color: COLORS.ppo2 } }),
       visToggle("Highlight exceeded limits", "highlight", { disabled: !vis.ppo2 }),
     ];
+    const ascentToggles = () => [
+      visToggle("Ascent rate", "ascent", { swatch: { color: COLORS.ascent } }),
+      visToggle("Max ascent", "maxAscent", { disabled: !vis.ascent, title: "Label the fastest ascent rate" }),
+      {
+        id: "ascentWindow", label: "Smoothing", value: ascentWindow, disabled: !vis.ascent,
+        options: ASCENT_WINDOWS.map((sec) => ({ value: sec, label: `${sec} s` })),
+        onChange: (sec) => {
+          ascentWindow = sec;
+          try { localStorage.setItem("divelog.ascentWindow", String(sec)); } catch (e) {}
+          renderCharts();
+        },
+      },
+    ];
     // Temperature is dashed in the combined chart, solid in its own panel.
     const tempToggles = (dashed) => [
       visToggle("Temperature", "temp", { swatch: { color: COLORS.temp, dashed } }),
-      visToggle("Show starting temperature", "startTemp", { disabled: !vis.temp }),
-      visToggle("Show minimum temperature", "minTemp", { disabled: !vis.temp }),
+      visToggle("Starting temp", "startTemp", { disabled: !vis.temp, title: "Label the water temperature at the start of the dive" }),
+      visToggle("Min temp", "minTemp", { disabled: !vis.temp, title: "Label the coldest water temperature" }),
     ];
 
     // Each panel stays when its lines are switched off, so its toggles do too.
@@ -1328,7 +1490,7 @@
         yDomain: [0, depthMax],
         invertY: true,
         yFmt: (v) => v + "m",
-        bands: depthBands(),
+        bands: depthBands(depthMax),
         peaks: depthPeaks(),
         series: vis.depth ? [depthSeries, ...limitOverlays()] : [],
       });
@@ -1367,6 +1529,19 @@
         peaks: ppo2Peaks(),
       });
 
+      // Ascent rate panel, ascending above the zero line
+      drawPanel({
+        title: `Ascent rate (m/min, ${ascentWindow} s smoothing) — descent below zero`,
+        toggles: ascentToggles(),
+        height: 156,
+        width,
+        xDomain,
+        yDomain: ascentDomain(),
+        yFmt: (v) => v.toFixed(0),
+        series: ascentSeries(),
+        peaks: ascentPeaks(),
+      });
+
       // Water temp panel
       drawPanel({
         title: "Water temperature",
@@ -1381,15 +1556,19 @@
       });
 
       drawXAxis(width, xDomain);
-      setupCrosshair(samples, width, xDomain, shownSwitches(), COLORS, tankLabels, vis);
+      setupCrosshair(samples, width, xDomain, shownSwitches(), COLORS, tankLabels, vis, ascentRates());
     }
 
-    // One tall chart on the depth axis. Tank pressure is squeezed into the
-    // middle half; PPO2 and water temperature split the bottom quarter.
-    // Hidden lines keep their slice and axis, so the rest doesn't move.
+    // One tall chart on the depth axis, which runs on past the deepest point
+    // (e.g. to 50 m for a 44 m dive) so the profile mostly clears the bottom
+    // slices. Tank pressure takes the middle; PPO2, ascent rate and water
+    // temperature split what's left below it. Hidden lines keep their slice
+    // and axis, so the rest doesn't move.
+    const combinedDepthMax = Math.ceil((deepest.depth + 5) / 10) * 10;
     function renderCombined(width) {
-      const pressureScale = { domain: [0, tankMax], band: [0.25, 0.75] };
-      const ppo2Scale = { domain: ppo2Domain, band: [0.77, 0.865] };
+      const pressureScale = { domain: [0, tankMax], band: [0.22, 0.6] };
+      const ppo2Scale = { domain: ppo2Domain, band: [0.63, 0.72] };
+      const ascentScale = { domain: ascentDomain(), band: [0.75, 0.855] };
       const tempScale = { domain: tempDomain, band: [0.885, 1] };
 
       const series = [
@@ -1398,6 +1577,7 @@
         })),
         vis.ppo2 && { name: "PPO2", color: COLORS.ppo2, points: pointsOf((s) => s.ppo2), ...ppo2Scale },
         vis.ppo2 && vis.highlight && { ...overPpo2Series, ...ppo2Scale },
+        ...ascentSeries(ascentScale),
         vis.temp && { name: "Temp", color: COLORS.temp, dashed: true, points: pointsOf((s) => s.waterTempC), ...tempScale },
         // Depth last so it draws on top of everything else.
         vis.depth && { name: "Depth", color: COLORS.depth, width: 2, points: pointsOf((s) => s.depth) },
@@ -1406,21 +1586,22 @@
 
       drawPanel({
         title: "Dive profile",
-        height: Math.round(DEPTH_HEIGHT * 2.5),
+        height: Math.round(DEPTH_HEIGHT * 3.25),
         width,
         margin: COMBINED_MARGIN,
         xDomain,
-        yDomain: [0, depthMax],
+        yDomain: [0, combinedDepthMax],
         invertY: true,
         yFmt: (v) => v + "m",
-        bands: depthBands(),
-        peaks: [...depthPeaks(), ...ppo2Peaks(ppo2Scale), ...tempPeaks(tempScale)],
+        bands: depthBands(combinedDepthMax),
+        peaks: [...depthPeaks(), ...ppo2Peaks(ppo2Scale), ...ascentPeaks(ascentScale), ...tempPeaks(tempScale)],
         series,
-        refLines: ppo2RefLines(ppo2Scale),
-        dividers: [0.25, 0.75, 0.875],
+        refLines: [...ppo2RefLines(ppo2Scale), ascentZeroLine(ascentScale)],
+        dividers: [0.22, 0.615, 0.735, 0.87],
         rightAxes: [
           { ...pressureScale, ticks: 4, fmt: (v) => Math.round(v) + " bar" },
           { ...ppo2Scale, ticks: 3, fmt: (v) => v.toFixed(1) + " atm" },
+          { ...ascentScale, ticks: 3, fmt: (v) => v.toFixed(0) + " m/min" },
           { ...tempScale, ticks: 3, fmt: (v) => v.toFixed(0) + "°C" },
         ],
         markers: shownSwitches(),
@@ -1429,14 +1610,18 @@
       });
 
       drawXAxis(width, xDomain, COMBINED_MARGIN);
-      // One column per group: depth, tanks, PPO2, temperature.
+      // A column per group where there's room; otherwise ascent rate goes
+      // under PPO2, making four columns that wrap two to a row.
+      const depthGroup = { title: "Depth", toggles: depthToggles() };
+      const tankGroup = tanksInUse.length && { title: "Tanks", toggles: tankToggles() };
+      const ppo2Group = { title: "PPO2", toggles: ppo2Toggles() };
+      const ascentGroup = { title: "Ascent rate", toggles: ascentToggles() };
+      const tempGroup = { title: "Temperature", toggles: tempToggles(true) };
       drawToggleGrid([
-        [{ title: "Depth", toggles: depthToggles() }],
-        tanksInUse.length && [{ title: "Tanks", toggles: tankToggles() }],
-        [{ title: "PPO2", toggles: ppo2Toggles() }],
-        [{ title: "Temperature", toggles: tempToggles(true) }],
-      ].filter(Boolean));
-      setupCrosshair(samples, width, xDomain, shownSwitches(), COLORS, tankLabels, vis);
+        [[depthGroup], tankGroup && [tankGroup], [ppo2Group], [ascentGroup], [tempGroup]].filter(Boolean),
+        [[depthGroup], tankGroup && [tankGroup], [ppo2Group, ascentGroup], [tempGroup]].filter(Boolean),
+      ]);
+      setupCrosshair(samples, width, xDomain, shownSwitches(), COLORS, tankLabels, vis, ascentRates());
     }
 
     function renderCharts() {
