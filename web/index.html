@@ -1081,23 +1081,25 @@
         series: [{ name: "Depth", color: COLORS.depth, points: pointsOf((s) => s.depth) }],
       });
 
-      // Tank pressure panel (only tanks that have any data)
-      const tankSeries = tanksInUse.map((i) => ({
-        name: tankLabels[i].full, color: COLORS.tanks[i], points: pointsOf((s) => s.tankPressureBar[i]),
-      }));
-      drawPanel({
-        title: "Tank pressure",
-        legendItems: tankSeries.map((s) => ({ name: s.name, color: s.color })),
-        height: 280,
-        width,
-        xDomain,
-        yDomain: [0, tankMax],
-        yFmt: (v) => Math.round(v) + " bar",
-        series: tankSeries,
-        markers: showGasSwitches ? gasSwitchEvents : [],
-        pointLabels: pressureLabelsFor(),
-        toggle: gasSwitchToggle(),
-      });
+      // Tank pressure panel (only tanks that have any data; none without air integration)
+      if (tanksInUse.length) {
+        const tankSeries = tanksInUse.map((i) => ({
+          name: tankLabels[i].full, color: COLORS.tanks[i], points: pointsOf((s) => s.tankPressureBar[i]),
+        }));
+        drawPanel({
+          title: "Tank pressure",
+          legendItems: tankSeries.map((s) => ({ name: s.name, color: s.color })),
+          height: 280,
+          width,
+          xDomain,
+          yDomain: [0, tankMax],
+          yFmt: (v) => Math.round(v) + " bar",
+          series: tankSeries,
+          markers: showGasSwitches ? gasSwitchEvents : [],
+          pointLabels: pressureLabelsFor(),
+          toggle: gasSwitchToggle(),
+        });
+      }
 
       // PPO2 panel
       drawPanel({
