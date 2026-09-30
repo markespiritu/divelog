@@ -1430,11 +1430,22 @@
     }
 
     function renderCharts() {
+      // Measuring labels mid-rebuild lays out the page while the stack is
+      // empty, which clamps the scroll position to the shorter page. Put it
+      // back afterwards, along with focus on the toggle that was just used.
+      const scrollY = window.scrollY;
+      const focused = stackEl.contains(document.activeElement) && document.activeElement.closest(".panel-toggle");
+      const focusedLabel = focused && focused.textContent;
       stackEl.innerHTML = "";
       panels.length = 0;
       const width = Math.min(1048, stackEl.clientWidth || root.clientWidth || 1048);
       if (chartView === "combined") renderCombined(width);
       else renderSeparate(width);
+      window.scrollTo(0, scrollY);
+      if (focusedLabel) {
+        const again = [...stackEl.querySelectorAll(".panel-toggle")].find((l) => l.textContent === focusedLabel);
+        if (again) again.querySelector("input").focus({ preventScroll: true });
+      }
     }
 
     renderCharts();
