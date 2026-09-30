@@ -757,12 +757,13 @@
     stackEl.appendChild(wrap);
   }
 
-  // One display toggle: { label, checked, onChange, swatch?: { color, dashed }, disabled? }.
+  // One display toggle: { id, label, checked, onChange, swatch?: { color, dashed }, disabled? }.
   // A swatch shows the line or band it controls, so the toggles double as the legend.
   // `spacer` keeps swatch-less labels lined up under the swatched ones in a column.
   function toggleEl(toggle, { spacer } = {}) {
     const toggleLabel = document.createElement("label");
     toggleLabel.className = "panel-toggle" + (toggle.disabled ? " disabled" : "");
+    toggleLabel.dataset.toggle = toggle.id;
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.checked = toggle.checked;
@@ -1152,7 +1153,7 @@
     // A toggle for one of the flags in `vis`; `tank` picks a slot of vis.tanks.
     function visToggle(label, key, { swatch, disabled, tank } = {}) {
       return {
-        label, swatch, disabled,
+        id: tank === undefined ? key : `tank${tank}`, label, swatch, disabled,
         checked: tank === undefined ? vis[key] : vis.tanks[tank],
         onChange: (checked) => {
           if (tank === undefined) vis[key] = checked; else vis.tanks[tank] = checked;
@@ -1289,7 +1290,7 @@
       visToggle("Depth", "depth", { swatch: { color: COLORS.depth } }),
       visToggle("Show deco ceiling (CEIL)", "ceiling", { swatch: LIMIT_SWATCH }),
       visToggle("Show maximum operating depth (MOD)", "mod", { swatch: LIMIT_SWATCH }),
-      visToggle("Highlight exceeding limits", "depthHighlight", { disabled: !vis.depth || !(vis.ceiling || vis.mod) }),
+      visToggle("Highlight exceeded limits", "depthHighlight", { disabled: !vis.depth || !(vis.ceiling || vis.mod) }),
       visToggle("Show maximum depth", "maxDepth", { disabled: !vis.depth }),
       visToggle("Show surface gradient factor (SurfGF)", "surfGf", { disabled: !vis.depth }),
     ];
@@ -1438,15 +1439,15 @@
       // back afterwards, along with focus on the toggle that was just used.
       const scrollY = window.scrollY;
       const focused = stackEl.contains(document.activeElement) && document.activeElement.closest(".panel-toggle");
-      const focusedLabel = focused && focused.textContent;
+      const focusedId = focused && focused.dataset.toggle;
       stackEl.innerHTML = "";
       panels.length = 0;
       const width = Math.min(1048, stackEl.clientWidth || root.clientWidth || 1048);
       if (chartView === "combined") renderCombined(width);
       else renderSeparate(width);
       window.scrollTo(0, scrollY);
-      if (focusedLabel) {
-        const again = [...stackEl.querySelectorAll(".panel-toggle")].find((l) => l.textContent === focusedLabel);
+      if (focusedId) {
+        const again = [...stackEl.querySelectorAll(".panel-toggle")].find((l) => l.dataset.toggle === focusedId);
         if (again) again.querySelector("input").focus({ preventScroll: true });
       }
     }
