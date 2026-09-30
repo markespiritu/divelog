@@ -700,13 +700,17 @@
     }
 
     // point markers (max depth, SurfGF): a dot on the sample with its value
-    // labelled just below, centred or to the right, kept inside the plot horizontally.
+    // labelled just below, centred or to the right, or level with it on the
+    // left (`beside`), kept inside the plot horizontally.
     (peaks || []).forEach((peak) => {
       const px = xScale(peak.t), py = yScale(peak.v);
       svg.appendChild(svgEl("circle", {
         cx: px, cy: py, r: 3.5, fill: peak.color, stroke: "var(--surface-1)", "stroke-width": 1.5,
       }));
-      const text = svgEl("text", {
+      const text = svgEl("text", peak.beside ? {
+        class: "point-label", fill: peak.color, x: px - 7, y: py,
+        "text-anchor": "end", "dominant-baseline": "central",
+      } : {
         class: "point-label", fill: peak.color, x: peak.align === "start" ? px + 5 : px, y: py + 7,
         "text-anchor": peak.align || "middle", "dominant-baseline": "hanging",
       });
@@ -1235,7 +1239,7 @@
         invertY: true,
         yFmt: (v) => v + "m",
         bands: depthBands(),
-        peaks: [maxDepthPeak, endGf99Marker, showMod && overLimitPeak].filter(Boolean),
+        peaks: [maxDepthPeak, endGf99Marker].filter(Boolean),
         series: [depthSeries, ...limitOverlays()],
       });
 
@@ -1268,6 +1272,8 @@
         yFmt: (v) => v.toFixed(1),
         series: [{ name: "PPO2", color: COLORS.ppo2, points: pointsOf((s) => s.ppo2) }],
         refLines: showMod ? [ppo2LimitLine()] : [],
+        // The worst reading is marked on the PPO2 line here, not on the depth profile.
+        peaks: showMod && overLimitPeak ? [{ ...overLimitPeak, v: worstPpo2.ppo2, beside: true }] : [],
       });
 
       // Water temp panel
