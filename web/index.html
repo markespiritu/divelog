@@ -699,11 +699,12 @@
       });
     }
 
-    // point markers (max depth, SurfGF): a dot on the sample with its value
-    // labelled just below, centred or to the right, or level with it on the
-    // left (`beside`), kept inside the plot horizontally.
+    // point markers (max depth, SurfGF, temperatures): a dot on the sample with
+    // its value labelled just below (or `above`), centred or to the right, or
+    // level with it on the left (`beside`), kept inside the plot horizontally.
+    // `scale` places it on a banded scale.
     (peaks || []).forEach((peak) => {
-      const px = xScale(peak.t), py = yScale(peak.v);
+      const px = xScale(peak.t), py = scaleFor(peak.scale)(peak.v);
       svg.appendChild(svgEl("circle", {
         cx: px, cy: py, r: 3.5, fill: peak.color, stroke: "var(--surface-1)", "stroke-width": 1.5,
       }));
@@ -711,8 +712,8 @@
         class: "point-label", fill: peak.color, x: px - 7, y: py,
         "text-anchor": "end", "dominant-baseline": "central",
       } : {
-        class: "point-label", fill: peak.color, x: peak.align === "start" ? px + 5 : px, y: py + 7,
-        "text-anchor": peak.align || "middle", "dominant-baseline": "hanging",
+        class: "point-label", fill: peak.color, x: peak.align === "start" ? px + 5 : px, y: peak.above ? py - 7 : py + 7,
+        "text-anchor": peak.align || "middle", "dominant-baseline": peak.above ? "auto" : "hanging",
       });
       text.textContent = peak.text;
       svg.appendChild(text);
@@ -1205,6 +1206,16 @@
       },
     });
     const pointsOf = (fn) => samples.map((s) => ({ t: s.t, v: fn(s) }));
+    // Water temperature at the start of the dive and where it first bottoms out.
+    const tempSamples = samples.filter((s) => s.waterTempC !== null);
+    const coldest = tempSamples.reduce((a, b) => (b.waterTempC < a.waterTempC ? b : a));
+    const tempPeaks = (scale) => [
+      // Both labelled above the line, clear of the trace as it falls away.
+      { t: tempSamples[0].t, v: tempSamples[0].waterTempC, scale, color: COLORS.temp, align: "start", above: true,
+        text: `${tempSamples[0].waterTempC.toFixed(0)}°C` },
+      { t: coldest.t, v: coldest.waterTempC, scale, color: COLORS.temp, align: "start", above: true,
+        text: `Min ${coldest.waterTempC.toFixed(0)}°C` },
+    ];
     const deepest = samples.reduce((a, b) => ((b.depth || 0) > (a.depth || 0) ? b : a));
     const maxDepthPeak = {
       t: deepest.t, v: deepest.depth, color: COLORS.depth, text: `Max ${deepest.depth.toFixed(1)} m`,
@@ -1285,6 +1296,7 @@
         yDomain: tempDomain,
         yFmt: (v) => v.toFixed(0) + "°",
         series: [{ name: "Temp", color: COLORS.temp, points: pointsOf((s) => s.waterTempC) }],
+        peaks: tempPeaks(),
       });
 
       drawXAxis(width, xDomain);
@@ -1322,7 +1334,7 @@
         invertY: true,
         yFmt: (v) => v + "m",
         bands: depthBands(),
-        peaks: [maxDepthPeak, endGf99Marker, showMod && overLimitPeak].filter(Boolean),
+        peaks: [maxDepthPeak, endGf99Marker, showMod && overLimitPeak, ...tempPeaks(tempScale)].filter(Boolean),
         series,
         refLines: showMod ? [ppo2LimitLine(ppo2Scale)] : [],
         dividers: [0.25, 0.75, 0.875],
