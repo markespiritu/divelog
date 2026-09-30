@@ -251,6 +251,12 @@
     return `EAN${o2}`;
   }
 
+  // Maximum operating depth at the chosen PPO2 limit, in metres of seawater
+  // (10 m per bar). The breathed mix comes from each sample's logged fractions.
+  const MOD_PPO2 = 1.6;
+  const modDepthM = (fractionO2) => (MOD_PPO2 / fractionO2 - 1) * 10;
+  const sampleMixName = (s) => mixName(Math.round(s.fractionO2 * 100), Math.round((s.fractionHe || 0) * 100));
+
   // Display labels per tank slot, e.g. { name: "D1", mix: "EAN56", full: "EAN56 (D1)" }.
   // Falls back to "Tank N" for dives parsed before tank names were recorded.
   function tankLabelsFor(dive) {
@@ -492,7 +498,7 @@
   // slice of the plot (`band`: [top, bottom] as fractions of the plot height)
   // with their own value domain, so several units can share one chart. Anything
   // without a band uses the panel's own y-domain across the full height.
-  function drawPanel({ title, legendItems, height, width, xDomain, series, yDomain, yFmt, invertY, bands, markers, pointLabels, pointLabelScale, rightAxes, dividers, toggle, margin, peaks }) {
+  function drawPanel({ title, legendItems, height, width, xDomain, series, yDomain, yFmt, invertY, bands, markers, pointLabels, pointLabelScale, rightAxes, dividers, toggles, margin, peaks, refLines }) {
     const MARGIN = margin || DEFAULT_MARGIN;
     const w = width, h = height;
     const innerW = w - MARGIN.left - MARGIN.right;
@@ -512,7 +518,7 @@
     const titleSpan = document.createElement("span");
     titleSpan.textContent = title;
     titleRow.appendChild(titleSpan);
-    if ((legendItems && legendItems.length > 1) || toggle) {
+    if ((legendItems && legendItems.length > 1) || (toggles && toggles.length)) {
       const controls = document.createElement("div");
       controls.className = "panel-controls";
       if (legendItems && legendItems.length > 1) {
@@ -534,7 +540,7 @@
         });
         controls.appendChild(legend);
       }
-      if (toggle) {
+      (toggles || []).forEach((toggle) => {
         const toggleLabel = document.createElement("label");
         toggleLabel.className = "panel-toggle";
         const checkbox = document.createElement("input");
@@ -546,7 +552,7 @@
         toggleLabel.appendChild(checkbox);
         toggleLabel.appendChild(text);
         controls.appendChild(toggleLabel);
-      }
+      });
       titleRow.appendChild(controls);
     }
     panelDiv.appendChild(titleRow);
@@ -590,13 +596,41 @@
       });
     });
 
-    // shaded bands (e.g. deco ceiling zone)
+    // shaded bands (e.g. deco ceiling zone, MOD floor)
     (bands || []).forEach((b) => {
       const path = b.points.map((p, i) => `${i === 0 ? "M" : "L"}${xScale(p.t)},${yScale(p.v)}`).join(" ");
       const baseY = yScale(b.base);
       const first = b.points[0], last = b.points[b.points.length - 1];
       const d = `${path} L${xScale(last.t)},${baseY} L${xScale(first.t)},${baseY} Z`;
       svg.appendChild(svgEl("path", { d, fill: b.color, opacity: b.opacity || 0.18, stroke: "none" }));
+      // Optional dashed edge along the band's free side, lifted wherever the band has no height.
+      if (b.outline) {
+        let edge = "", penDown = false;
+        b.points.forEach((p) => {
+          if (p.v === b.base) { penDown = false; return; }
+          edge += `${penDown ? "L" : "M"}${xScale(p.t)},${yScale(p.v)} `;
+          penDown = true;
+        });
+        svg.appendChild(svgEl("path", {
+          d: edge, fill: "none", stroke: b.color, "stroke-width": 1, "stroke-dasharray": "4 3", opacity: 0.8,
+        }));
+      }
+    });
+
+    // horizontal reference lines (e.g. the PPO2 limit), optionally on a banded scale
+    (refLines || []).forEach((r) => {
+      const y = scaleFor(r.scale)(r.v);
+      svg.appendChild(svgEl("line", {
+        x1: MARGIN.left, x2: w - MARGIN.right, y1: y, y2: y,
+        stroke: r.color, "stroke-width": 1, "stroke-dasharray": "4 3", opacity: 0.8,
+      }));
+      if (r.text) {
+        const label = svgEl("text", {
+          class: "point-label", fill: r.color, x: w - MARGIN.right - 4, y: y - 3, "text-anchor": "end",
+        });
+        label.textContent = r.text;
+        svg.appendChild(label);
+      }
     });
 
     // series lines
@@ -702,7 +736,7 @@
     stackEl.appendChild(wrap);
   }
 
-  function setupCrosshair(samples, width, xDomain, gasSwitchEvents, colors, tankLabels) {
+  function setupCrosshair(samples, width, xDomain, gasSwitchEvents, colors, tankLabels, showMod) {
     const MARGIN = panels[0].margin;
     stackEl.style.position = "relative";
     const overlay = svgEl("svg", { width, height: 2, style: "position:absolute; top:0; left:0; pointer-events:none;" });
@@ -777,6 +811,11 @@
         ["Temp", s.waterTempC, "°C", colors.temp],
         ...s.tankPressureBar.map((v, i) => [tankLabels[i].full, v, "bar", colors.tanks[i]]),
       ];
+      if (showMod && s.fractionO2) {
+        const mod = modDepthM(s.fractionO2);
+        const over = s.ppo2 > MOD_PPO2;
+        rowsData.splice(4, 0, [`MOD (${sampleMixName(s)})${over ? " — exceeded" : ""}`, mod.toFixed(1), "m", "var(--status-critical)"]);
+      }
       rowsData.forEach(([name, val, unit, color]) => {
         if (val === null || val === undefined) return;
         const row = document.createElement("div");
@@ -1009,6 +1048,8 @@
     const xDomain = [samples[0].t, samples[samples.length - 1].t];
     const gasSwitchEvents = detectGasSwitches(samples);
     let showGasSwitches = true;
+    let showMod = true;
+    try { if (localStorage.getItem("divelog.showMod") === "false") showMod = false; } catch (e) {}
 
     const viewSwitch = document.getElementById("view-switch");
     let chartView = "combined";
@@ -1028,6 +1069,9 @@
 
     const DEPTH_HEIGHT = 264;
     const depthMax = Math.max(...samples.map((s) => s.depth || 0)) * 1.08;
+    const maxPpo2 = Math.max(...samples.map((s) => s.ppo2 || 0));
+    // Grow past 1.8 atm when the dive did, so high readings aren't clipped.
+    const ppo2Domain = [0, Math.max(1.8, Math.ceil(maxPpo2 * 10 - 1e-9) / 10)];
     const tankMax = Math.max(...samples.flatMap((s) => s.tankPressureBar.filter((v) => v !== null))) * 1.05;
     const tempDomain = [Math.min(...temps) - 1, Math.max(...temps) + 1];
     // Series colors are shared by both views so each one reads the same in
@@ -1045,6 +1089,36 @@
       color: "var(--status-critical)",
       opacity: 0.16,
     };
+    // MOD of the gas being breathed, shaded from there to the bottom of the
+    // chart. Stepped at each change of mix; deeper than the chart means no band.
+    const modBand = { points: [], base: depthMax, color: "var(--status-critical)", opacity: 0.08, outline: true };
+    samples.forEach((s, i) => {
+      const v = Math.min(modDepthM(s.fractionO2), depthMax);
+      const prev = modBand.points[modBand.points.length - 1];
+      if (i && prev.v !== v) modBand.points.push({ t: s.t, v: prev.v });
+      modBand.points.push({ t: s.t, v });
+    });
+    // Depth wherever the logged PPO2 is over the limit, drawn in red over the profile.
+    const overLimitSeries = {
+      name: "Over MOD", color: "var(--status-critical)", width: 2.5,
+      points: samples.map((s) => ({ t: s.t, v: s.ppo2 > MOD_PPO2 ? s.depth : null })),
+    };
+    const worstPpo2 = samples.reduce((a, b) => (b.ppo2 > a.ppo2 ? b : a));
+    const overLimitPeak = worstPpo2.ppo2 > MOD_PPO2 && {
+      t: worstPpo2.t, v: worstPpo2.depth, color: "var(--status-critical)",
+      text: `PPO2 ${worstPpo2.ppo2.toFixed(2)} @ ${worstPpo2.depth.toFixed(1)} m`,
+    };
+    const modLegendItem = { name: `MOD (${MOD_PPO2} atm)`, color: "var(--status-critical)", dashed: true };
+    const ppo2LimitLine = (scale) => ({ v: MOD_PPO2, scale, color: "var(--status-critical)", text: `${MOD_PPO2}` });
+    const modToggle = () => ({
+      label: "Show MOD",
+      checked: showMod,
+      onChange: (checked) => {
+        showMod = checked;
+        try { localStorage.setItem("divelog.showMod", String(checked)); } catch (e) {}
+        renderCharts();
+      },
+    });
     const pointsOf = (fn) => samples.map((s) => ({ t: s.t, v: fn(s) }));
     const deepest = samples.reduce((a, b) => ((b.depth || 0) > (a.depth || 0) ? b : a));
     const maxDepthPeak = {
@@ -1067,18 +1141,21 @@
         .map((l) => ({ ...l, color: COLORS.tanks[l.tank], text: `${Math.round(l.v)} bar` }));
 
     function renderSeparate(width) {
-      // Depth panel with deco-ceiling band
+      // Depth panel with deco-ceiling band and, optionally, the MOD floor
+      const depthSeries = { name: "Depth", color: COLORS.depth, points: pointsOf((s) => s.depth) };
       drawPanel({
         title: "Depth",
+        legendItems: showMod ? [depthSeries, modLegendItem] : [],
         height: DEPTH_HEIGHT,
         width,
         xDomain,
         yDomain: [0, depthMax],
         invertY: true,
         yFmt: (v) => v + "m",
-        bands: [decoBand],
-        peaks: [maxDepthPeak, endGf99Marker].filter(Boolean),
-        series: [{ name: "Depth", color: COLORS.depth, points: pointsOf((s) => s.depth) }],
+        bands: showMod ? [decoBand, modBand] : [decoBand],
+        peaks: [maxDepthPeak, endGf99Marker, showMod && overLimitPeak].filter(Boolean),
+        series: showMod ? [depthSeries, overLimitSeries] : [depthSeries],
+        toggles: [modToggle()],
       });
 
       // Tank pressure panel (only tanks that have any data; none without air integration)
@@ -1097,7 +1174,7 @@
           series: tankSeries,
           markers: showGasSwitches ? gasSwitchEvents : [],
           pointLabels: pressureLabelsFor(),
-          toggle: gasSwitchToggle(),
+          toggles: [gasSwitchToggle()],
         });
       }
 
@@ -1107,9 +1184,10 @@
         height: 156,
         width,
         xDomain,
-        yDomain: [0, 1.8],
+        yDomain: ppo2Domain,
         yFmt: (v) => v.toFixed(1),
         series: [{ name: "PPO2", color: COLORS.ppo2, points: pointsOf((s) => s.ppo2) }],
+        refLines: showMod ? [ppo2LimitLine()] : [],
       });
 
       // Water temp panel
@@ -1124,14 +1202,14 @@
       });
 
       drawXAxis(width, xDomain);
-      setupCrosshair(samples, width, xDomain, showGasSwitches ? gasSwitchEvents : [], COLORS, tankLabels);
+      setupCrosshair(samples, width, xDomain, showGasSwitches ? gasSwitchEvents : [], COLORS, tankLabels, showMod);
     }
 
     // One tall chart on the depth axis. Tank pressure is squeezed into the
     // middle half; PPO2 and water temperature split the bottom quarter.
     function renderCombined(width) {
       const pressureScale = { domain: [0, tankMax], band: [0.25, 0.75] };
-      const ppo2Scale = { domain: [0, 1.8], band: [0.77, 0.865] };
+      const ppo2Scale = { domain: ppo2Domain, band: [0.77, 0.865] };
       const tempScale = { domain: tempDomain, band: [0.885, 1] };
 
       const series = [
@@ -1143,7 +1221,8 @@
         // Depth last so it draws on top of everything else.
         { name: "Depth", color: COLORS.depth, width: 2, points: pointsOf((s) => s.depth) },
       ];
-      const legendOrder = [series[series.length - 1], ...series.slice(0, -1)];
+      const legendOrder = [series[series.length - 1], ...(showMod ? [modLegendItem] : []), ...series.slice(0, -1)];
+      if (showMod) series.push(overLimitSeries);
 
       drawPanel({
         title: "Dive profile",
@@ -1155,9 +1234,10 @@
         yDomain: [0, depthMax],
         invertY: true,
         yFmt: (v) => v + "m",
-        bands: [decoBand],
-        peaks: [maxDepthPeak, endGf99Marker].filter(Boolean),
+        bands: showMod ? [decoBand, modBand] : [decoBand],
+        peaks: [maxDepthPeak, endGf99Marker, showMod && overLimitPeak].filter(Boolean),
         series,
+        refLines: showMod ? [ppo2LimitLine(ppo2Scale)] : [],
         dividers: [0.25, 0.75, 0.875],
         rightAxes: [
           { ...pressureScale, ticks: 4, fmt: (v) => Math.round(v) + " bar" },
@@ -1167,11 +1247,11 @@
         markers: showGasSwitches ? gasSwitchEvents : [],
         pointLabels: pressureLabelsFor(),
         pointLabelScale: pressureScale,
-        toggle: gasSwitchToggle(),
+        toggles: [gasSwitchToggle(), modToggle()],
       });
 
       drawXAxis(width, xDomain, COMBINED_MARGIN);
-      setupCrosshair(samples, width, xDomain, showGasSwitches ? gasSwitchEvents : [], COLORS, tankLabels);
+      setupCrosshair(samples, width, xDomain, showGasSwitches ? gasSwitchEvents : [], COLORS, tankLabels, showMod);
     }
 
     function renderCharts() {
