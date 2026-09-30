@@ -161,8 +161,21 @@
   }
 
   #chart-stack { position: relative; }
+  /* One chart filling the window; renderCharts sizes it to fit. */
+  #chart-stack.maximized {
+    position: fixed; inset: 0; z-index: 20; overflow: auto;
+    padding: 16px; background: var(--page-plane);
+  }
+  #chart-stack.maximized .panel { margin-bottom: 8px; }
+  html.chart-maximized { overflow: hidden; }
+  .max-toggle {
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-secondary);
+    border-radius: 6px; padding: 5px; cursor: pointer; line-height: 0;
+  }
+  .max-toggle:hover { color: var(--text-primary); }
+  .max-toggle svg { overflow: visible; }
   #tooltip {
-    position: absolute; pointer-events: none; background: var(--surface-1);
+    position: absolute; top: 0; left: 0; pointer-events: none; background: var(--surface-1);
     border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
     font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.15); white-space: nowrap;
     opacity: 0; transition: opacity 80ms; z-index: 10;
@@ -196,7 +209,8 @@
 
   #status { color: var(--text-secondary); font-size: 13px; }
 
-  .map-container { height: 260px; border-radius: 8px; overflow: hidden; }
+  /* Isolated so Leaflet's high z-indexes stay under a maximized chart. */
+  .map-container { height: 260px; border-radius: 8px; overflow: hidden; isolation: isolate; }
   /* Dark mode: invert the OSM raster tiles (not the marker) and darken the controls and popup. */
   .map-container.leaflet-container { background: var(--map-bg, #ddd); }
   .map-container .leaflet-tile-pane { filter: var(--map-tile-filter, none); }
@@ -561,7 +575,9 @@
   // slice of the plot (`band`: [top, bottom] as fractions of the plot height)
   // with their own value domain, so several units can share one chart. Anything
   // without a band uses the panel's own y-domain across the full height.
-  function drawPanel({ title, toggles, height, width, xDomain, series, yDomain, yFmt, invertY, bands, markers, pointLabels, pointLabelScale, rightAxes, dividers, margin, peaks, refLines }) {
+  // `maximize` puts a Maximize / Restore button in the title row:
+  // { maximized, onClick }.
+  function drawPanel({ title, toggles, maximize, height, width, xDomain, series, yDomain, yFmt, invertY, bands, markers, pointLabels, pointLabelScale, rightAxes, dividers, margin, peaks, refLines }) {
     const MARGIN = margin || DEFAULT_MARGIN;
     const w = width, h = height;
     const innerW = w - MARGIN.left - MARGIN.right;
@@ -581,6 +597,7 @@
     const titleSpan = document.createElement("span");
     titleSpan.textContent = title;
     titleRow.appendChild(titleSpan);
+    if (maximize) titleRow.appendChild(maximizeButton(maximize));
     panelDiv.appendChild(titleRow);
 
     const svg = svgEl("svg", {
@@ -748,6 +765,28 @@
     return panelDiv;
   }
 
+  function maximizeButton({ maximized, onClick }) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "max-toggle";
+    // Icon only: the label and tooltip say what it does.
+    btn.setAttribute("aria-label", maximized ? "Restore chart" : "Maximize chart");
+    btn.title = maximized ? "Restore to the normal size (Esc)" : "Fill the window with this chart";
+    // Along the bottom-left to top-right diagonal: a double-headed arrow out
+    // to the corners, or two arrows pointing back in to the middle.
+    const icon = svgEl("svg", { width: 12, height: 12, viewBox: "0 0 10 10", "aria-hidden": "true" });
+    icon.appendChild(svgEl("path", {
+      d: maximized
+        ? "M9.5 0.5L6 4M6 1v3h3M0.5 9.5L4 6M1 6h3v3"
+        : "M1 9L9 1M5 1h4v4M1 5v4h4",
+      fill: "none", stroke: "currentColor", "stroke-width": 1.5,
+      "stroke-linecap": "round", "stroke-linejoin": "round",
+    }));
+    btn.appendChild(icon);
+    btn.addEventListener("click", onClick);
+    return btn;
+  }
+
   function drawXAxis(width, xDomain, margin) {
     const MARGIN = margin || DEFAULT_MARGIN;
     const h = 26;
@@ -911,7 +950,6 @@
   // `ascentRates` is the smoothed ascent rate per sample (m/min, ascending positive).
   function setupCrosshair(samples, width, xDomain, gasSwitchEvents, colors, tankLabels, vis, ascentRates) {
     const MARGIN = panels[0].margin;
-    stackEl.style.position = "relative";
     const overlay = svgEl("svg", { width, height: 2, style: "position:absolute; top:0; left:0; pointer-events:none;" });
     // Use a transparent full-height div for pointer capture instead of svg overlay,
     // since panels have varying heights.
@@ -934,7 +972,6 @@
     capture.style.height = stackEl.scrollHeight + "px";
     capture.style.cursor = "crosshair";
     capture.style.zIndex = "1";
-    stackEl.style.position = "relative";
     stackEl.appendChild(capture);
 
     const xScale = panels[0].xScale;
@@ -1029,11 +1066,15 @@
         tooltip.appendChild(row);
       }
 
+      // The tooltip lives in the stack (see renderCharts), so place it from there.
       const stackRect = stackEl.getBoundingClientRect();
-      let left = x + 12;
-      if (left + 180 > stackEl.clientWidth) left = x - 190;
+      const px = evt.clientX - stackRect.left + stackEl.scrollLeft;
+      let left = px + 12;
+      if (left + tooltip.offsetWidth > stackEl.clientWidth) left = px - 12 - tooltip.offsetWidth;
       tooltip.style.left = left + "px";
-      tooltip.style.top = (evt.clientY - stackRect.top - 10) + "px";
+      // Kept above the bottom of the stack, which it would otherwise stretch.
+      const top = evt.clientY - stackRect.top + stackEl.scrollTop - 10;
+      tooltip.style.top = Math.max(0, Math.min(top, capture.offsetHeight - tooltip.offsetHeight)) + "px";
       tooltip.style.opacity = "1";
     }
 
@@ -1288,6 +1329,30 @@
       renderCharts();
     });
 
+    // The chart filling the window, by panel id ("combined", "depth", …), or
+    // null. Not remembered across visits.
+    let maximized = null;
+    let scrollBeforeMax = 0;
+    function setMaximized(id) {
+      if (id && !maximized) scrollBeforeMax = window.scrollY;
+      const restoring = maximized;
+      maximized = id;
+      stackEl.classList.toggle("maximized", !!id);
+      document.documentElement.classList.toggle("chart-maximized", !!id);
+      renderCharts();
+      if (!id) window.scrollTo(0, scrollBeforeMax);
+      // Keep focus on the button that was pressed, now in its other state.
+      const btn = stackEl.querySelector(id ? ".max-toggle" : `[data-panel="${restoring}"] .max-toggle`);
+      if (btn) btn.focus({ preventScroll: true });
+    }
+    const maximizeFor = (id) => ({
+      maximized: maximized === id,
+      onClick: () => setMaximized(maximized === id ? null : id),
+    });
+    document.addEventListener("keydown", (evt) => {
+      if (evt.key === "Escape" && maximized) setMaximized(null);
+    });
+
     const DEPTH_HEIGHT = 264;
     const depthMax = Math.max(...samples.map((s) => s.depth || 0)) * 1.08;
     const maxPpo2 = Math.max(...samples.map((s) => s.ppo2 || 0));
@@ -1478,31 +1543,30 @@
     ];
 
     // Each panel stays when its lines are switched off, so its toggles do too.
-    function renderSeparate(width) {
-      // Depth panel with, optionally, the deco-ceiling band and the MOD floor
-      const depthSeries = { name: "Depth", color: COLORS.depth, points: pointsOf((s) => s.depth) };
-      drawPanel({
-        title: "Depth",
-        toggles: depthToggles(),
-        height: DEPTH_HEIGHT,
-        width,
-        xDomain,
-        yDomain: [0, depthMax],
-        invertY: true,
-        yFmt: (v) => v + "m",
-        bands: depthBands(depthMax),
-        peaks: depthPeaks(),
-        series: vis.depth ? [depthSeries, ...limitOverlays()] : [],
-      });
-
-      // Tank pressure panel (only tanks that have any data; none without air integration)
-      if (tanksInUse.length) {
-        drawPanel({
+    // With a chart maximized, only that one is drawn, `extra` px taller.
+    function renderSeparate(width, extra) {
+      const panelSpecs = [
+        // Depth panel with, optionally, the deco-ceiling band and the MOD floor
+        {
+          id: "depth",
+          title: "Depth",
+          toggles: depthToggles(),
+          height: DEPTH_HEIGHT,
+          yDomain: [0, depthMax],
+          invertY: true,
+          yFmt: (v) => v + "m",
+          bands: depthBands(depthMax),
+          peaks: depthPeaks(),
+          series: vis.depth
+            ? [{ name: "Depth", color: COLORS.depth, points: pointsOf((s) => s.depth) }, ...limitOverlays()]
+            : [],
+        },
+        // Tank pressure panel (only tanks that have any data; none without air integration)
+        tanksInUse.length && {
+          id: "tanks",
           title: "Tank pressure",
           toggles: tankToggles(),
           height: 280,
-          width,
-          xDomain,
           yDomain: [0, tankMax],
           yFmt: (v) => Math.round(v) + " bar",
           series: shownTanks().map((i) => ({
@@ -1510,49 +1574,47 @@
           })),
           markers: shownSwitches(),
           pointLabels: pressureLabelsFor(),
-        });
-      }
+        },
+        // PPO2 panel
+        {
+          id: "ppo2",
+          title: "PPO2",
+          toggles: ppo2Toggles(),
+          height: 156,
+          yDomain: ppo2Domain,
+          yFmt: (v) => v.toFixed(1),
+          series: vis.ppo2
+            ? [{ name: "PPO2", color: COLORS.ppo2, points: pointsOf((s) => s.ppo2) }, vis.highlight && overPpo2Series].filter(Boolean)
+            : [],
+          refLines: ppo2RefLines(),
+          peaks: ppo2Peaks(),
+        },
+        // Ascent rate panel, ascending above the zero line
+        {
+          id: "ascent",
+          title: `Ascent rate (m/min, ${ascentWindow} s smoothing) — descent below zero`,
+          toggles: ascentToggles(),
+          height: 156,
+          yDomain: ascentDomain(),
+          yFmt: (v) => v.toFixed(0),
+          series: ascentSeries(),
+          peaks: ascentPeaks(),
+        },
+        // Water temp panel
+        {
+          id: "temp",
+          title: "Water temperature",
+          toggles: tempToggles(false),
+          height: 156,
+          yDomain: tempDomain,
+          yFmt: (v) => v.toFixed(0) + "°",
+          series: vis.temp ? [{ name: "Temp", color: COLORS.temp, points: pointsOf((s) => s.waterTempC) }] : [],
+          peaks: tempPeaks(),
+        },
+      ].filter(Boolean);
 
-      // PPO2 panel
-      drawPanel({
-        title: "PPO2",
-        toggles: ppo2Toggles(),
-        height: 156,
-        width,
-        xDomain,
-        yDomain: ppo2Domain,
-        yFmt: (v) => v.toFixed(1),
-        series: vis.ppo2
-          ? [{ name: "PPO2", color: COLORS.ppo2, points: pointsOf((s) => s.ppo2) }, vis.highlight && overPpo2Series].filter(Boolean)
-          : [],
-        refLines: ppo2RefLines(),
-        peaks: ppo2Peaks(),
-      });
-
-      // Ascent rate panel, ascending above the zero line
-      drawPanel({
-        title: `Ascent rate (m/min, ${ascentWindow} s smoothing) — descent below zero`,
-        toggles: ascentToggles(),
-        height: 156,
-        width,
-        xDomain,
-        yDomain: ascentDomain(),
-        yFmt: (v) => v.toFixed(0),
-        series: ascentSeries(),
-        peaks: ascentPeaks(),
-      });
-
-      // Water temp panel
-      drawPanel({
-        title: "Water temperature",
-        toggles: tempToggles(false),
-        height: 156,
-        width,
-        xDomain,
-        yDomain: tempDomain,
-        yFmt: (v) => v.toFixed(0) + "°",
-        series: vis.temp ? [{ name: "Temp", color: COLORS.temp, points: pointsOf((s) => s.waterTempC) }] : [],
-        peaks: tempPeaks(),
+      panelSpecs.filter((p) => !maximized || p.id === maximized).forEach(({ id, height, ...spec }) => {
+        drawPanel({ ...spec, height: height + extra, width, xDomain, maximize: maximizeFor(id) }).dataset.panel = id;
       });
 
       drawXAxis(width, xDomain);
@@ -1568,12 +1630,18 @@
     const combinedDepthMax = Math.ceil((deepest.depth + 5) / 10) * 10;
     // Slice heights in px of plot area.
     const COMBINED_SLICES = { pressure: 280, gap: 22, ppo2: 66, ascent: 77, temp: 85 };
-    function combinedLayout() {
-      const { pressure, gap, ppo2, ascent, temp } = COMBINED_SLICES;
+    // The plot height follows from the slices, all linear in them, so
+    // stretching every slice by the same factor makes the plot `extra` px taller.
+    function combinedLayout(extra = 0) {
+      const sliceSum = ({ pressure, gap, ppo2, ascent, temp }) =>
+        (pressure * 200 / tankMax + 3 * gap + ppo2 + ascent + temp) / (1 - 10 / combinedDepthMax);
+      const k = Math.max(0.3, 1 + extra / sliceSum(COMBINED_SLICES));
+      const { pressure, gap, ppo2, ascent, temp } = Object.fromEntries(
+        Object.entries(COMBINED_SLICES).map(([key, px]) => [key, px * k]));
       const below200 = pressure * 200 / tankMax;
       // 10 m sits at 10 / depthMax of the plot height, and everything from
       // there down is fixed, which pins the plot height.
-      const innerH = (below200 + 3 * gap + ppo2 + ascent + temp) / (1 - 10 / combinedDepthMax);
+      const innerH = sliceSum({ pressure, gap, ppo2, ascent, temp });
       const f = (px) => px / innerH;
       const pressureBottom = 10 / combinedDepthMax + f(below200);
       const ppo2Top = pressureBottom + f(gap);
@@ -1588,8 +1656,8 @@
         dividers: [pressureBottom - f(pressure), ppo2Top - f(gap / 2), ascentTop - f(gap / 2), tempTop - f(gap / 2)],
       };
     }
-    function renderCombined(width) {
-      const layout = combinedLayout();
+    function renderCombined(width, extra) {
+      const layout = combinedLayout(extra);
       const pressureScale = { domain: [0, tankMax], band: layout.pressure };
       const ppo2Scale = { domain: ppo2Domain, band: layout.ppo2 };
       const ascentScale = { domain: ascentDomain(), band: layout.ascent };
@@ -1610,6 +1678,7 @@
 
       drawPanel({
         title: "Dive profile",
+        maximize: maximizeFor("combined"),
         height: layout.height,
         width,
         margin: COMBINED_MARGIN,
@@ -1631,7 +1700,7 @@
         markers: shownSwitches(),
         pointLabels: pressureLabelsFor(),
         pointLabelScale: pressureScale,
-      });
+      }).dataset.panel = "combined";
 
       drawXAxis(width, xDomain, COMBINED_MARGIN);
       // A column per group where there's room; otherwise ascent rate goes
@@ -1655,11 +1724,36 @@
       const scrollY = window.scrollY;
       const focused = stackEl.contains(document.activeElement) && document.activeElement.closest(".panel-toggle");
       const focusedId = focused && focused.dataset.toggle;
-      stackEl.innerHTML = "";
-      panels.length = 0;
-      const width = Math.min(1048, stackEl.clientWidth || root.clientWidth || 1048);
-      if (chartView === "combined") renderCombined(width);
-      else renderSeparate(width);
+      // A maximized chart is drawn at its normal size first, then again
+      // resized by whatever room is left in the window: taller, or shorter to
+      // keep its toggles in view, but no shorter than half the window (as on
+      // a phone, where the toggles run long); the overlay scrolls instead.
+      const draw = (extra) => {
+        stackEl.innerHTML = "";
+        panels.length = 0;
+        const width = maximized
+          ? stackEl.clientWidth - 32
+          : Math.min(1048, stackEl.clientWidth || root.clientWidth || 1048);
+        if (chartView === "combined") renderCombined(width, extra);
+        else renderSeparate(width, extra);
+      };
+      // A maximize left over from the other view falls back to normal.
+      if (maximized && !(chartView === "combined" ? maximized === "combined" : maximized !== "combined")) {
+        maximized = null;
+        stackEl.classList.remove("maximized");
+        document.documentElement.classList.remove("chart-maximized");
+      }
+      draw(0);
+      if (maximized) {
+        const end = document.createElement("div");
+        stackEl.appendChild(end);
+        const room = stackEl.clientHeight - parseFloat(getComputedStyle(stackEl).paddingBottom) - end.offsetTop;
+        const chartH = panels[0].svg.getBoundingClientRect().height;
+        draw(Math.max(room, Math.min(0, stackEl.clientHeight / 2 - chartH)));
+      }
+      // The crosshair starts hidden again, so the tooltip does too.
+      tooltip.style.opacity = "0";
+      stackEl.appendChild(tooltip);
       window.scrollTo(0, scrollY);
       if (focusedId) {
         const again = [...stackEl.querySelectorAll(".panel-toggle")].find((l) => l.dataset.toggle === focusedId);
