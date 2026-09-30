@@ -492,7 +492,7 @@
   // slice of the plot (`band`: [top, bottom] as fractions of the plot height)
   // with their own value domain, so several units can share one chart. Anything
   // without a band uses the panel's own y-domain across the full height.
-  function drawPanel({ title, legendItems, height, width, xDomain, series, yDomain, yFmt, invertY, bands, markers, pointLabels, pointLabelScale, rightAxes, dividers, toggle, margin, peak }) {
+  function drawPanel({ title, legendItems, height, width, xDomain, series, yDomain, yFmt, invertY, bands, markers, pointLabels, pointLabelScale, rightAxes, dividers, toggle, margin, peaks }) {
     const MARGIN = margin || DEFAULT_MARGIN;
     const w = width, h = height;
     const innerW = w - MARGIN.left - MARGIN.right;
@@ -640,23 +640,23 @@
       });
     }
 
-    // max depth marker: a dot on the deepest sample with its depth labelled
-    // just below, kept inside the plot horizontally.
-    if (peak) {
+    // point markers (max depth, SurfGF): a dot on the sample with its value
+    // labelled just below, centred or to the right, kept inside the plot horizontally.
+    (peaks || []).forEach((peak) => {
       const px = xScale(peak.t), py = yScale(peak.v);
       svg.appendChild(svgEl("circle", {
         cx: px, cy: py, r: 3.5, fill: peak.color, stroke: "var(--surface-1)", "stroke-width": 1.5,
       }));
       const text = svgEl("text", {
-        class: "point-label", fill: peak.color, x: px, y: py + 7,
-        "text-anchor": "middle", "dominant-baseline": "hanging",
+        class: "point-label", fill: peak.color, x: peak.align === "start" ? px + 5 : px, y: py + 7,
+        "text-anchor": peak.align || "middle", "dominant-baseline": "hanging",
       });
       text.textContent = peak.text;
       svg.appendChild(text);
       const box = text.getBBox();
       const shift = Math.max(MARGIN.left - box.x, 0) + Math.min(w - MARGIN.right - (box.x + box.width), 0);
-      if (shift) text.setAttribute("x", px + shift);
-    }
+      if (shift) text.setAttribute("x", Number(text.getAttribute("x")) + shift);
+    });
 
     // baseline
     svg.appendChild(svgEl("line", {
@@ -1050,6 +1050,13 @@
     const maxDepthPeak = {
       t: deepest.t, v: deepest.depth, color: COLORS.depth, text: `Max ${deepest.depth.toFixed(1)} m`,
     };
+    // EndGF99 from Shearwater Cloud, marked where the diver reaches the surface
+    // (the first zero-depth sample after the last one underwater).
+    const lastUnderwater = samples.map((s) => s.depth > 0).lastIndexOf(true);
+    const surfacing = samples[Math.min(lastUnderwater + 1, samples.length - 1)];
+    const endGf99Marker = dive.endGf99 != null && {
+      t: surfacing.t, v: surfacing.depth, color: COLORS.depth, align: "start", text: `SurfGF ${dive.endGf99}%`,
+    };
     const gasSwitchToggle = () => ({
       label: "Show gas switches",
       checked: showGasSwitches,
@@ -1070,7 +1077,7 @@
         invertY: true,
         yFmt: (v) => v + "m",
         bands: [decoBand],
-        peak: maxDepthPeak,
+        peaks: [maxDepthPeak, endGf99Marker].filter(Boolean),
         series: [{ name: "Depth", color: COLORS.depth, points: pointsOf((s) => s.depth) }],
       });
 
@@ -1147,7 +1154,7 @@
         invertY: true,
         yFmt: (v) => v + "m",
         bands: [decoBand],
-        peak: maxDepthPeak,
+        peaks: [maxDepthPeak, endGf99Marker].filter(Boolean),
         series,
         dividers: [0.25, 0.75, 0.875],
         rightAxes: [

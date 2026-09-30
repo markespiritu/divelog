@@ -67,8 +67,19 @@ def load_sqlite_metadata(dive_number: str):
         site_row = cur.fetchone()
         if site_row:
             site = dict(site_row)
+
+    # Summary values Shearwater Cloud derives from the samples, e.g. EndGF99.
+    calculated = {}
+    if details.get("DiveId") is not None:
+        cur.execute("select calculated_values_from_samples from log_data where log_id = ?", (details["DiveId"],))
+        log_row = cur.fetchone()
+        if log_row and log_row[0]:
+            try:
+                calculated = json.loads(log_row[0])
+            except json.JSONDecodeError:
+                pass
     con.close()
-    return {"details": details, "site": site}
+    return {"details": details, "site": site, "calculated": calculated}
 
 
 def parse_coordinates(details, site):
@@ -157,6 +168,7 @@ def parse_csv(csv_path: Path):
     meta = load_sqlite_metadata(dive_number)
     details = meta.get("details", {})
     site = meta.get("site", {})
+    calculated = meta.get("calculated", {})
 
     dive = {
         "id": dive_number or find_dive_id_from_filename(csv_path),
@@ -175,6 +187,8 @@ def parse_csv(csv_path: Path):
         "coordinates": parse_coordinates(details, site),
         "gfMin": num_or_none(summary.get("GF Minimum")),
         "gfMax": num_or_none(summary.get("GF Maximum")),
+        # Shearwater Cloud's GF99 summary for the dive, shown at the surfacing point.
+        "endGf99": calculated.get("EndGF99"),
         "surfaceIntervalMin": num_or_none(summary.get("Surface Interval (min)")),
         "maxDepthM": num_or_none(summary.get("Max Depth")),
         "maxTimeSec": num_or_none(summary.get("Max Time")),

@@ -18,6 +18,7 @@
   },
   "gfMin": 50,
   "gfMax": 85,
+  "endGf99": 75.0,
   "surfaceIntervalMin": 28626,
   "maxDepthM": 44.2,
   "maxTimeSec": 2719,
