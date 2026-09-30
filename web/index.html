@@ -782,7 +782,7 @@
     stackEl.appendChild(controls);
   }
 
-  function setupCrosshair(samples, width, xDomain, gasSwitchEvents, colors, tankLabels, showMod) {
+  function setupCrosshair(samples, width, xDomain, gasSwitchEvents, colors, tankLabels, showMod, showCeiling) {
     const MARGIN = panels[0].margin;
     stackEl.style.position = "relative";
     const overlay = svgEl("svg", { width, height: 2, style: "position:absolute; top:0; left:0; pointer-events:none;" });
@@ -851,7 +851,10 @@
       tooltip.appendChild(timeRow);
       const rowsData = [
         ["Depth", s.depth, "m", colors.depth],
-        ["Ceiling", s.firstStopDepth, "m", "var(--status-critical)"],
+        ...(showCeiling ? [[
+          `Ceiling${s.firstStopDepth > 0 && s.depth < s.firstStopDepth ? " — exceeded" : ""}`,
+          s.firstStopDepth, "m", "var(--status-critical)",
+        ]] : []),
         ["NDL", s.ndlMin, "min", "var(--text-muted)"],
         ["PPO2", s.ppo2, "atm", colors.ppo2],
         ["Temp", s.waterTempC, "°C", colors.temp],
@@ -860,7 +863,7 @@
       if (showMod && s.fractionO2) {
         const mod = modDepthM(s.fractionO2);
         const over = s.ppo2 > MOD_PPO2;
-        rowsData.splice(4, 0, [`MOD (${sampleMixName(s)})${over ? " — exceeded" : ""}`, mod.toFixed(1), "m", "var(--status-critical)"]);
+        rowsData.splice(showCeiling ? 4 : 3, 0, [`MOD (${sampleMixName(s)})${over ? " — exceeded" : ""}`, mod.toFixed(1), "m", "var(--status-critical)"]);
       }
       rowsData.forEach(([name, val, unit, color]) => {
         if (val === null || val === undefined) return;
@@ -1099,6 +1102,8 @@
     const shownSwitches = () => gasSwitchEvents.filter(isShownSwitch);
     let showMod = true;
     try { if (localStorage.getItem("divelog.showMod") === "false") showMod = false; } catch (e) {}
+    let showCeiling = true;
+    try { if (localStorage.getItem("divelog.showCeiling") === "false") showCeiling = false; } catch (e) {}
 
     const viewSwitch = document.getElementById("view-switch");
     let chartView = "combined";
@@ -1132,12 +1137,37 @@
       tanks: ["var(--series-1)", "var(--series-2)", "var(--series-4)", "var(--series-3)"],
     };
     const tanksInUse = [0, 1, 2, 3].filter((i) => samples.some((s) => s.tankPressureBar[i] !== null));
-    const decoBand = {
-      points: samples.map((s) => ({ t: s.t, v: s.firstStopDepth || 0 })),
-      base: 0,
-      color: "var(--status-critical)",
-      opacity: 0.16,
+    // Deco ceiling, shaded up to the surface. Stepped at each change of stop depth.
+    const decoBand = { points: [], base: 0, color: "var(--status-critical)", opacity: 0.16, outline: true };
+    samples.forEach((s, i) => {
+      const v = s.firstStopDepth || 0;
+      const prev = decoBand.points[decoBand.points.length - 1];
+      if (i && prev.v !== v) decoBand.points.push({ t: s.t, v: prev.v });
+      decoBand.points.push({ t: s.t, v });
+    });
+    // Depth wherever the diver is shallower than the ceiling, drawn in red over
+    // the profile. Each breach reaches to its neighbouring samples so a single
+    // sample still draws as a segment.
+    const overCeiling = samples.map((s) => s.firstStopDepth > 0 && s.depth < s.firstStopDepth);
+    const overCeilingSeries = {
+      name: "Over ceiling", color: "var(--status-critical)", width: 2.5,
+      points: samples.map((s, i) => ({
+        t: s.t, v: overCeiling[i] || overCeiling[i - 1] || overCeiling[i + 1] ? s.depth : null,
+      })),
     };
+    const ceilingLegendItem = { name: "Deco ceiling", color: "var(--status-critical)", dashed: true };
+    const ceilingToggle = () => ({
+      label: "Show deco ceiling",
+      checked: showCeiling,
+      onChange: (checked) => {
+        showCeiling = checked;
+        try { localStorage.setItem("divelog.showCeiling", String(checked)); } catch (e) {}
+        renderCharts();
+      },
+    });
+    const depthBands = () => [showCeiling && decoBand, showMod && modBand].filter(Boolean);
+    const limitOverlays = () => [showMod && overLimitSeries, showCeiling && overCeilingSeries].filter(Boolean);
+    const limitLegendItems = () => [showCeiling && ceilingLegendItem, showMod && modLegendItem].filter(Boolean);
     // MOD of the gas being breathed, shaded from there to the bottom of the
     // chart. Stepped at each change of mix; deeper than the chart means no band.
     const modBand = { points: [], base: depthMax, color: "var(--status-critical)", opacity: 0.08, outline: true };
@@ -1191,20 +1221,20 @@
         .map((l) => ({ ...l, color: COLORS.tanks[l.tank], text: `${Math.round(l.v)} bar` }));
 
     function renderSeparate(width) {
-      // Depth panel with deco-ceiling band and, optionally, the MOD floor
+      // Depth panel with, optionally, the deco-ceiling band and the MOD floor
       const depthSeries = { name: "Depth", color: COLORS.depth, points: pointsOf((s) => s.depth) };
       drawPanel({
         title: "Depth",
-        legendItems: showMod ? [depthSeries, modLegendItem] : [],
+        legendItems: limitLegendItems().length ? [depthSeries, ...limitLegendItems()] : [],
         height: DEPTH_HEIGHT,
         width,
         xDomain,
         yDomain: [0, depthMax],
         invertY: true,
         yFmt: (v) => v + "m",
-        bands: showMod ? [decoBand, modBand] : [decoBand],
+        bands: depthBands(),
         peaks: [maxDepthPeak, endGf99Marker, showMod && overLimitPeak].filter(Boolean),
-        series: showMod ? [depthSeries, overLimitSeries] : [depthSeries],
+        series: [depthSeries, ...limitOverlays()],
       });
 
       // Tank pressure panel (only tanks that have any data; none without air integration)
@@ -1250,8 +1280,8 @@
       });
 
       drawXAxis(width, xDomain);
-      drawToggles([tanksInUse.length && gasSwitchToggle(), modToggle()].filter(Boolean));
-      setupCrosshair(samples, width, xDomain, shownSwitches(), COLORS, tankLabels, showMod);
+      drawToggles([ceilingToggle(), tanksInUse.length && gasSwitchToggle(), modToggle()].filter(Boolean));
+      setupCrosshair(samples, width, xDomain, shownSwitches(), COLORS, tankLabels, showMod, showCeiling);
     }
 
     // One tall chart on the depth axis. Tank pressure is squeezed into the
@@ -1270,8 +1300,8 @@
         // Depth last so it draws on top of everything else.
         { name: "Depth", color: COLORS.depth, width: 2, points: pointsOf((s) => s.depth) },
       ];
-      const legendOrder = [series[series.length - 1], ...(showMod ? [modLegendItem] : []), ...series.slice(0, -1)];
-      if (showMod) series.push(overLimitSeries);
+      const legendOrder = [series[series.length - 1], ...limitLegendItems(), ...series.slice(0, -1)];
+      series.push(...limitOverlays());
 
       drawPanel({
         title: "Dive profile",
@@ -1283,7 +1313,7 @@
         yDomain: [0, depthMax],
         invertY: true,
         yFmt: (v) => v + "m",
-        bands: showMod ? [decoBand, modBand] : [decoBand],
+        bands: depthBands(),
         peaks: [maxDepthPeak, endGf99Marker, showMod && overLimitPeak].filter(Boolean),
         series,
         refLines: showMod ? [ppo2LimitLine(ppo2Scale)] : [],
@@ -1299,8 +1329,8 @@
       });
 
       drawXAxis(width, xDomain, COMBINED_MARGIN);
-      drawToggles([gasSwitchToggle(), modToggle()].filter(Boolean));
-      setupCrosshair(samples, width, xDomain, shownSwitches(), COLORS, tankLabels, showMod);
+      drawToggles([ceilingToggle(), gasSwitchToggle(), modToggle()].filter(Boolean));
+      setupCrosshair(samples, width, xDomain, shownSwitches(), COLORS, tankLabels, showMod, showCeiling);
     }
 
     function renderCharts() {
