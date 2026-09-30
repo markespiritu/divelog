@@ -106,12 +106,21 @@
   }
   .panel-title { position: relative; z-index: 2; font-size: 13px; color: var(--text-secondary); margin-bottom: 2px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap: 4px 14px;}
   /* Above the crosshair's pointer-capture layer, which spans the whole chart stack. */
-  .panel-controls { position: relative; z-index: 2; display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: 4px 14px; margin: -4px 0 12px; }
-  .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--text-secondary); }
-  .legend .key { white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; }
-  .legend .swatch { width: 14px; height: 2px; border-radius: 2px; display:inline-block; }
-  .panel-toggle { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-secondary); cursor: pointer; user-select: none; }
-  .panel-toggle input { cursor: pointer; }
+  /* The toggles double as the legend: line toggles carry their series' swatch. */
+  .panel-controls { position: relative; z-index: 2; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 16px; margin: 4px 0 4px; }
+  .toggle-grid {
+    position: relative; z-index: 2; display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 12px 24px; margin: 0 0 12px; padding: 12px 16px;
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
+  }
+  .toggle-group + .toggle-group { margin-top: 12px; }
+  .toggle-group h3 { margin: 0 0 6px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-muted); }
+  .toggle-group .panel-toggle { padding: 2px 0; }
+  .panel-toggle { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); cursor: pointer; user-select: none; }
+  .panel-toggle input { cursor: pointer; margin: 0; }
+  .panel-toggle.disabled { opacity: 0.5; cursor: default; }
+  .panel-toggle.disabled input { cursor: default; }
+  .panel-toggle .swatch { width: 14px; height: 2px; border-radius: 2px; flex: none; }
   .gas-switch-tag { fill: var(--text-secondary); font-size: 9px; }
 
   .chart-toolbar { display: flex; justify-content: flex-end; margin-bottom: 8px; }
@@ -540,7 +549,7 @@
   // slice of the plot (`band`: [top, bottom] as fractions of the plot height)
   // with their own value domain, so several units can share one chart. Anything
   // without a band uses the panel's own y-domain across the full height.
-  function drawPanel({ title, legendItems, height, width, xDomain, series, yDomain, yFmt, invertY, bands, markers, pointLabels, pointLabelScale, rightAxes, dividers, margin, peaks, refLines }) {
+  function drawPanel({ title, toggles, height, width, xDomain, series, yDomain, yFmt, invertY, bands, markers, pointLabels, pointLabelScale, rightAxes, dividers, margin, peaks, refLines }) {
     const MARGIN = margin || DEFAULT_MARGIN;
     const w = width, h = height;
     const innerW = w - MARGIN.left - MARGIN.right;
@@ -560,25 +569,6 @@
     const titleSpan = document.createElement("span");
     titleSpan.textContent = title;
     titleRow.appendChild(titleSpan);
-    if (legendItems && legendItems.length > 1) {
-      const legend = document.createElement("div");
-      legend.className = "legend";
-      legendItems.forEach((li) => {
-        const key = document.createElement("span");
-        key.className = "key";
-        const sw = document.createElement("span");
-        sw.className = "swatch";
-        sw.style.background = li.dashed
-          ? `repeating-linear-gradient(90deg, ${li.color} 0 4px, transparent 4px 7px)`
-          : li.color;
-        const label = document.createElement("span");
-        label.textContent = li.name;
-        key.appendChild(sw);
-        key.appendChild(label);
-        legend.appendChild(key);
-      });
-      titleRow.appendChild(legend);
-    }
     panelDiv.appendChild(titleRow);
 
     const svg = svgEl("svg", {
@@ -586,6 +576,7 @@
       style: `width:100%; height:${h}px; display:block;`,
     });
     panelDiv.appendChild(svg);
+    if (toggles && toggles.length) panelDiv.appendChild(toggleRow(toggles));
 
     stackEl.appendChild(panelDiv);
 
@@ -766,28 +757,64 @@
     stackEl.appendChild(wrap);
   }
 
-  // Display toggles, in one row under the time axis, clear of the legends.
-  function drawToggles(toggles) {
-    if (!toggles.length) return;
-    const controls = document.createElement("div");
-    controls.className = "panel-controls";
-    toggles.forEach((toggle) => {
-      const toggleLabel = document.createElement("label");
-      toggleLabel.className = "panel-toggle";
-      const checkbox = document.createElement("input");
-      checkbox.type = "checkbox";
-      checkbox.checked = toggle.checked;
-      checkbox.addEventListener("change", () => toggle.onChange(checkbox.checked));
-      const text = document.createElement("span");
-      text.textContent = toggle.label;
-      toggleLabel.appendChild(checkbox);
-      toggleLabel.appendChild(text);
-      controls.appendChild(toggleLabel);
-    });
-    stackEl.appendChild(controls);
+  // One display toggle: { label, checked, onChange, swatch?: { color, dashed }, disabled? }.
+  // A swatch shows the line or band it controls, so the toggles double as the legend.
+  // `spacer` keeps swatch-less labels lined up under the swatched ones in a column.
+  function toggleEl(toggle, { spacer } = {}) {
+    const toggleLabel = document.createElement("label");
+    toggleLabel.className = "panel-toggle" + (toggle.disabled ? " disabled" : "");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = toggle.checked;
+    checkbox.disabled = !!toggle.disabled;
+    checkbox.addEventListener("change", () => toggle.onChange(checkbox.checked));
+    toggleLabel.appendChild(checkbox);
+    if (toggle.swatch || spacer) {
+      const sw = document.createElement("span");
+      sw.className = "swatch";
+      const { color, dashed } = toggle.swatch || {};
+      if (color) {
+        sw.style.background = dashed ? `repeating-linear-gradient(90deg, ${color} 0 4px, transparent 4px 7px)` : color;
+      }
+      toggleLabel.appendChild(sw);
+    }
+    const text = document.createElement("span");
+    text.textContent = toggle.label;
+    toggleLabel.appendChild(text);
+    return toggleLabel;
   }
 
-  function setupCrosshair(samples, width, xDomain, gasSwitchEvents, colors, tankLabels, showMod, showCeiling) {
+  // A row of toggles, placed under the chart they control in the Separate view.
+  function toggleRow(toggles) {
+    const controls = document.createElement("div");
+    controls.className = "panel-controls";
+    toggles.forEach((toggle) => controls.appendChild(toggleEl(toggle)));
+    return controls;
+  }
+
+  // Grouped toggles under the combined chart: `columns` is a list of columns,
+  // each a list of { title, toggles } groups stacked top to bottom.
+  function drawToggleGrid(columns) {
+    const grid = document.createElement("div");
+    grid.className = "toggle-grid";
+    columns.forEach((groups) => {
+      const col = document.createElement("div");
+      groups.forEach(({ title, toggles }) => {
+        const group = document.createElement("div");
+        group.className = "toggle-group";
+        const heading = document.createElement("h3");
+        heading.textContent = title;
+        group.appendChild(heading);
+        toggles.forEach((toggle) => group.appendChild(toggleEl(toggle, { spacer: true })));
+        col.appendChild(group);
+      });
+      grid.appendChild(col);
+    });
+    stackEl.appendChild(grid);
+  }
+
+  // `vis` is the display toggles: the tooltip leaves out whatever is switched off.
+  function setupCrosshair(samples, width, xDomain, gasSwitchEvents, colors, tankLabels, vis) {
     const MARGIN = panels[0].margin;
     stackEl.style.position = "relative";
     const overlay = svgEl("svg", { width, height: 2, style: "position:absolute; top:0; left:0; pointer-events:none;" });
@@ -855,20 +882,21 @@
       timeRow.textContent = fmtTime(s.t) + " elapsed";
       tooltip.appendChild(timeRow);
       const rowsData = [
-        ["Depth", s.depth, "m", colors.depth],
-        ...(showCeiling ? [[
+        ...(vis.depth ? [["Depth", s.depth, "m", colors.depth]] : []),
+        ...(vis.ceiling ? [[
           `Ceiling${s.firstStopDepth > 0 && s.depth < s.firstStopDepth ? " — exceeded" : ""}`,
           s.firstStopDepth, "m", "var(--status-critical)",
         ]] : []),
         ["NDL", s.ndlMin, "min", "var(--text-muted)"],
-        ["PPO2", s.ppo2, "atm", colors.ppo2],
-        ["Temp", s.waterTempC, "°C", colors.temp],
-        ...s.tankPressureBar.map((v, i) => [tankLabels[i].full, v, "bar", colors.tanks[i]]),
+        ...(vis.ppo2 ? [["PPO2", s.ppo2, "atm", colors.ppo2]] : []),
+        ...(vis.temp ? [["Temp", s.waterTempC, "°C", colors.temp]] : []),
+        ...s.tankPressureBar.map((v, i) => [tankLabels[i].full, vis.tanks[i] ? v : null, "bar", colors.tanks[i]]),
       ];
-      if (showMod && s.fractionO2) {
+      if (vis.mod && s.fractionO2) {
         const mod = modDepthM(s.fractionO2);
         const over = s.ppo2 > MOD_PPO2;
-        rowsData.splice(showCeiling ? 4 : 3, 0, [`MOD (${sampleMixName(s)})${over ? " — exceeded" : ""}`, mod.toFixed(1), "m", "var(--status-critical)"]);
+        // Just after the PPO2 row (or NDL, with PPO2 hidden).
+        rowsData.splice(rowsData.findIndex((r) => r[0] === (vis.ppo2 ? "PPO2" : "NDL")) + 1, 0, [`MOD (${sampleMixName(s)})${over ? " — exceeded" : ""}`, mod.toFixed(1), "m", "var(--status-critical)"]);
       }
       rowsData.forEach(([name, val, unit, color]) => {
         if (val === null || val === undefined) return;
@@ -1100,15 +1128,41 @@
 
     const xDomain = [samples[0].t, samples[samples.length - 1].t];
     const gasSwitchEvents = detectGasSwitches(samples, dive.tanks);
-    // Switches the computer recorded (a change of logged mix) always show;
-    // switches inferred from pressure only show when toggled on.
-    let showInferredSwitches = true;
-    const isShownSwitch = (e) => showInferredSwitches || !e.inferred;
+    // Display toggles, all on by default and remembered across visits. `tanks`
+    // is per tank slot. Switches the computer recorded (a change of logged mix)
+    // always show; switches inferred from pressure only with `inferredSwitches`.
+    const vis = {
+      depth: true, ceiling: true, mod: true, maxDepth: true, surfGf: true,
+      tanks: [true, true, true, true], inferredSwitches: true,
+      ppo2: true, highlight: true,
+      temp: true, startTemp: true, minTemp: true,
+    };
+    try {
+      // Carry over the MOD and ceiling settings saved before the toggles were grouped.
+      if (localStorage.getItem("divelog.showMod") === "false") vis.mod = false;
+      if (localStorage.getItem("divelog.showCeiling") === "false") vis.ceiling = false;
+      const saved = JSON.parse(localStorage.getItem("divelog.toggles")) || {};
+      Object.keys(vis).forEach((k) => {
+        const ok = k === "tanks"
+          ? Array.isArray(saved.tanks) && saved.tanks.length === 4 && saved.tanks.every((v) => typeof v === "boolean")
+          : typeof saved[k] === "boolean";
+        if (ok) vis[k] = saved[k];
+      });
+    } catch (e) {}
+    // A toggle for one of the flags in `vis`; `tank` picks a slot of vis.tanks.
+    function visToggle(label, key, { swatch, disabled, tank } = {}) {
+      return {
+        label, swatch, disabled,
+        checked: tank === undefined ? vis[key] : vis.tanks[tank],
+        onChange: (checked) => {
+          if (tank === undefined) vis[key] = checked; else vis.tanks[tank] = checked;
+          try { localStorage.setItem("divelog.toggles", JSON.stringify(vis)); } catch (e) {}
+          renderCharts();
+        },
+      };
+    }
+    const isShownSwitch = (e) => vis.inferredSwitches || !e.inferred;
     const shownSwitches = () => gasSwitchEvents.filter(isShownSwitch);
-    let showMod = true;
-    try { if (localStorage.getItem("divelog.showMod") === "false") showMod = false; } catch (e) {}
-    let showCeiling = true;
-    try { if (localStorage.getItem("divelog.showCeiling") === "false") showCeiling = false; } catch (e) {}
 
     const viewSwitch = document.getElementById("view-switch");
     let chartView = "combined";
@@ -1162,19 +1216,6 @@
         t: s.t, v: overCeiling[i] || overCeiling[i - 1] || overCeiling[i + 1] ? s.depth : null,
       })),
     };
-    const ceilingLegendItem = { name: "Deco ceiling", color: "var(--status-critical)", dashed: true };
-    const ceilingToggle = () => ({
-      label: "Show deco ceiling",
-      checked: showCeiling,
-      onChange: (checked) => {
-        showCeiling = checked;
-        try { localStorage.setItem("divelog.showCeiling", String(checked)); } catch (e) {}
-        renderCharts();
-      },
-    });
-    const depthBands = () => [showCeiling && decoBand, showMod && modBand].filter(Boolean);
-    const limitOverlays = () => [showMod && overLimitSeries, showCeiling && overCeilingSeries].filter(Boolean);
-    const limitLegendItems = () => [showCeiling && ceilingLegendItem, showMod && modLegendItem].filter(Boolean);
     // MOD of the gas being breathed, shaded from there to the bottom of the
     // chart. Stepped at each change of mix; deeper than the chart means no band.
     const modBand = { ...LIMIT_BAND, points: [], base: depthMax };
@@ -1189,33 +1230,36 @@
       name: "Over MOD", color: "var(--status-critical)", width: 2.5,
       points: samples.map((s) => ({ t: s.t, v: s.ppo2 > MOD_PPO2 ? s.depth : null })),
     };
+    const depthBands = () => [vis.ceiling && decoBand, vis.mod && modBand].filter(Boolean);
+    // The red breaches on the depth profile go with the limit they cross.
+    const limitOverlays = () => [vis.mod && overLimitSeries, vis.ceiling && overCeilingSeries].filter(Boolean);
+    // PPO2 over the limit, drawn in red over the PPO2 line, reaching to its
+    // neighbouring samples like the depth breaches do.
+    const overPpo2 = samples.map((s) => s.ppo2 > MOD_PPO2);
+    const overPpo2Series = {
+      name: "PPO2 over limit", color: "var(--status-critical)", width: 2.5,
+      points: samples.map((s, i) => ({
+        t: s.t, v: overPpo2[i] || overPpo2[i - 1] || overPpo2[i + 1] ? s.ppo2 : null,
+      })),
+    };
     const worstPpo2 = samples.reduce((a, b) => (b.ppo2 > a.ppo2 ? b : a));
-    const overLimitPeak = worstPpo2.ppo2 > MOD_PPO2 && {
-      t: worstPpo2.t, v: worstPpo2.depth, color: "var(--status-critical)",
+    // The worst reading, marked on the PPO2 line.
+    const overLimitPeak = (scale) => worstPpo2.ppo2 > MOD_PPO2 && {
+      t: worstPpo2.t, v: worstPpo2.ppo2, scale, color: "var(--status-critical)", beside: true,
       text: `PPO2 ${worstPpo2.ppo2.toFixed(2)} @ ${worstPpo2.depth.toFixed(1)} m`,
     };
-    const modLegendItem = { name: `MOD (${MOD_PPO2} atm)`, color: "var(--status-critical)", dashed: true };
     const ppo2LimitLine = (scale) => ({ v: MOD_PPO2, scale, color: "var(--status-critical)", text: `${MOD_PPO2}` });
-    const modToggle = () => ({
-      label: "Show MOD",
-      checked: showMod,
-      onChange: (checked) => {
-        showMod = checked;
-        try { localStorage.setItem("divelog.showMod", String(checked)); } catch (e) {}
-        renderCharts();
-      },
-    });
     const pointsOf = (fn) => samples.map((s) => ({ t: s.t, v: fn(s) }));
     // Water temperature at the start of the dive and where it first bottoms out.
     const tempSamples = samples.filter((s) => s.waterTempC !== null);
     const coldest = tempSamples.reduce((a, b) => (b.waterTempC < a.waterTempC ? b : a));
-    const tempPeaks = (scale) => [
+    const tempPeaks = (scale) => (vis.temp ? [
       // Both labelled above the line, clear of the trace as it falls away.
-      { t: tempSamples[0].t, v: tempSamples[0].waterTempC, scale, color: COLORS.temp, align: "start", above: true,
+      vis.startTemp && { t: tempSamples[0].t, v: tempSamples[0].waterTempC, scale, color: COLORS.temp, align: "start", above: true,
         text: `${tempSamples[0].waterTempC.toFixed(0)}°C` },
-      { t: coldest.t, v: coldest.waterTempC, scale, color: COLORS.temp, align: "start", above: true,
+      vis.minTemp && { t: coldest.t, v: coldest.waterTempC, scale, color: COLORS.temp, align: "start", above: true,
         text: `Min ${coldest.waterTempC.toFixed(0)}°C` },
-    ];
+    ].filter(Boolean) : []);
     const deepest = samples.reduce((a, b) => ((b.depth || 0) > (a.depth || 0) ? b : a));
     const maxDepthPeak = {
       t: deepest.t, v: deepest.depth, color: COLORS.depth, text: `Max ${deepest.depth.toFixed(1)} m`,
@@ -1227,22 +1271,48 @@
     const endGf99Marker = dive.endGf99 != null && {
       t: surfacing.t, v: surfacing.depth, color: COLORS.depth, align: "start", text: `SurfGF ${dive.endGf99}%`,
     };
-    // Only offered when there are inferred switches to hide.
-    const gasSwitchToggle = () => gasSwitchEvents.some((e) => e.inferred) && ({
-      label: "Show inferred gas switches",
-      checked: showInferredSwitches,
-      onChange: (checked) => { showInferredSwitches = checked; renderCharts(); },
-    });
+    const depthPeaks = () => (vis.depth ? [vis.maxDepth && maxDepthPeak, vis.surfGf && endGf99Marker].filter(Boolean) : []);
+    const ppo2Peaks = (scale) => (vis.ppo2 && vis.highlight && overLimitPeak(scale) ? [overLimitPeak(scale)] : []);
+    const ppo2RefLines = (scale) => (vis.ppo2 && vis.mod ? [ppo2LimitLine(scale)] : []);
+    const shownTanks = () => tanksInUse.filter((i) => vis.tanks[i]);
     const pressureLabelsFor = () =>
       buildPressureLabels(samples, gasSwitchEvents, { isShown: isShownSwitch })
+        .filter((l) => vis.tanks[l.tank])
         .map((l) => ({ ...l, color: COLORS.tanks[l.tank], text: `${Math.round(l.v)} bar` }));
 
+    // Toggles, the same in both views. Line and band toggles come first, with
+    // their swatch; labels that sit on a line are greyed out while it's hidden.
+    const LIMIT_SWATCH = { color: "var(--status-critical)", dashed: true };
+    const depthToggles = () => [
+      visToggle("Depth", "depth", { swatch: { color: COLORS.depth } }),
+      visToggle("Show deco ceiling (CEIL)", "ceiling", { swatch: LIMIT_SWATCH }),
+      visToggle("Show maximum operating depth (MOD)", "mod", { swatch: LIMIT_SWATCH }),
+      visToggle("Show maximum depth", "maxDepth", { disabled: !vis.depth }),
+      visToggle("Show surface gradient factor (SurfGF)", "surfGf", { disabled: !vis.depth }),
+    ];
+    const tankToggles = () => [
+      ...tanksInUse.map((i) => visToggle(tankLabels[i].full, "tanks", { tank: i, swatch: { color: COLORS.tanks[i] } })),
+      // Only offered when there are inferred switches to hide.
+      ...(gasSwitchEvents.some((e) => e.inferred) ? [visToggle("Show inferred gas switches", "inferredSwitches")] : []),
+    ];
+    const ppo2Toggles = () => [
+      visToggle("PPO2", "ppo2", { swatch: { color: COLORS.ppo2 } }),
+      visToggle("Highlight exceeded limits", "highlight", { disabled: !vis.ppo2 }),
+    ];
+    // Temperature is dashed in the combined chart, solid in its own panel.
+    const tempToggles = (dashed) => [
+      visToggle("Temperature", "temp", { swatch: { color: COLORS.temp, dashed } }),
+      visToggle("Show starting temperature", "startTemp", { disabled: !vis.temp }),
+      visToggle("Show minimum temperature", "minTemp", { disabled: !vis.temp }),
+    ];
+
+    // Each panel stays when its lines are switched off, so its toggles do too.
     function renderSeparate(width) {
       // Depth panel with, optionally, the deco-ceiling band and the MOD floor
       const depthSeries = { name: "Depth", color: COLORS.depth, points: pointsOf((s) => s.depth) };
       drawPanel({
         title: "Depth",
-        legendItems: limitLegendItems().length ? [depthSeries, ...limitLegendItems()] : [],
+        toggles: depthToggles(),
         height: DEPTH_HEIGHT,
         width,
         xDomain,
@@ -1250,24 +1320,23 @@
         invertY: true,
         yFmt: (v) => v + "m",
         bands: depthBands(),
-        peaks: [maxDepthPeak, endGf99Marker].filter(Boolean),
-        series: [depthSeries, ...limitOverlays()],
+        peaks: depthPeaks(),
+        series: vis.depth ? [depthSeries, ...limitOverlays()] : [],
       });
 
       // Tank pressure panel (only tanks that have any data; none without air integration)
       if (tanksInUse.length) {
-        const tankSeries = tanksInUse.map((i) => ({
-          name: tankLabels[i].full, color: COLORS.tanks[i], points: pointsOf((s) => s.tankPressureBar[i]),
-        }));
         drawPanel({
           title: "Tank pressure",
-          legendItems: tankSeries.map((s) => ({ name: s.name, color: s.color })),
+          toggles: tankToggles(),
           height: 280,
           width,
           xDomain,
           yDomain: [0, tankMax],
           yFmt: (v) => Math.round(v) + " bar",
-          series: tankSeries,
+          series: shownTanks().map((i) => ({
+            name: tankLabels[i].full, color: COLORS.tanks[i], points: pointsOf((s) => s.tankPressureBar[i]),
+          })),
           markers: shownSwitches(),
           pointLabels: pressureLabelsFor(),
         });
@@ -1276,56 +1345,58 @@
       // PPO2 panel
       drawPanel({
         title: "PPO2",
+        toggles: ppo2Toggles(),
         height: 156,
         width,
         xDomain,
         yDomain: ppo2Domain,
         yFmt: (v) => v.toFixed(1),
-        series: [{ name: "PPO2", color: COLORS.ppo2, points: pointsOf((s) => s.ppo2) }],
-        refLines: showMod ? [ppo2LimitLine()] : [],
-        // The worst reading is marked on the PPO2 line here, not on the depth profile.
-        peaks: showMod && overLimitPeak ? [{ ...overLimitPeak, v: worstPpo2.ppo2, beside: true }] : [],
+        series: vis.ppo2
+          ? [{ name: "PPO2", color: COLORS.ppo2, points: pointsOf((s) => s.ppo2) }, vis.highlight && overPpo2Series].filter(Boolean)
+          : [],
+        refLines: ppo2RefLines(),
+        peaks: ppo2Peaks(),
       });
 
       // Water temp panel
       drawPanel({
         title: "Water temperature",
+        toggles: tempToggles(false),
         height: 156,
         width,
         xDomain,
         yDomain: tempDomain,
         yFmt: (v) => v.toFixed(0) + "°",
-        series: [{ name: "Temp", color: COLORS.temp, points: pointsOf((s) => s.waterTempC) }],
+        series: vis.temp ? [{ name: "Temp", color: COLORS.temp, points: pointsOf((s) => s.waterTempC) }] : [],
         peaks: tempPeaks(),
       });
 
       drawXAxis(width, xDomain);
-      drawToggles([ceilingToggle(), tanksInUse.length && gasSwitchToggle(), modToggle()].filter(Boolean));
-      setupCrosshair(samples, width, xDomain, shownSwitches(), COLORS, tankLabels, showMod, showCeiling);
+      setupCrosshair(samples, width, xDomain, shownSwitches(), COLORS, tankLabels, vis);
     }
 
     // One tall chart on the depth axis. Tank pressure is squeezed into the
     // middle half; PPO2 and water temperature split the bottom quarter.
+    // Hidden lines keep their slice and axis, so the rest doesn't move.
     function renderCombined(width) {
       const pressureScale = { domain: [0, tankMax], band: [0.25, 0.75] };
       const ppo2Scale = { domain: ppo2Domain, band: [0.77, 0.865] };
       const tempScale = { domain: tempDomain, band: [0.885, 1] };
 
       const series = [
-        ...tanksInUse.map((i) => ({
+        ...shownTanks().map((i) => ({
           name: tankLabels[i].full, color: COLORS.tanks[i], points: pointsOf((s) => s.tankPressureBar[i]), ...pressureScale,
         })),
-        { name: "PPO2", color: COLORS.ppo2, points: pointsOf((s) => s.ppo2), ...ppo2Scale },
-        { name: "Temp", color: COLORS.temp, dashed: true, points: pointsOf((s) => s.waterTempC), ...tempScale },
+        vis.ppo2 && { name: "PPO2", color: COLORS.ppo2, points: pointsOf((s) => s.ppo2), ...ppo2Scale },
+        vis.ppo2 && vis.highlight && { ...overPpo2Series, ...ppo2Scale },
+        vis.temp && { name: "Temp", color: COLORS.temp, dashed: true, points: pointsOf((s) => s.waterTempC), ...tempScale },
         // Depth last so it draws on top of everything else.
-        { name: "Depth", color: COLORS.depth, width: 2, points: pointsOf((s) => s.depth) },
-      ];
-      const legendOrder = [series[series.length - 1], ...limitLegendItems(), ...series.slice(0, -1)];
-      series.push(...limitOverlays());
+        vis.depth && { name: "Depth", color: COLORS.depth, width: 2, points: pointsOf((s) => s.depth) },
+        ...(vis.depth ? limitOverlays() : []),
+      ].filter(Boolean);
 
       drawPanel({
         title: "Dive profile",
-        legendItems: legendOrder.map((s) => ({ name: s.name, color: s.color, dashed: s.dashed })),
         height: Math.round(DEPTH_HEIGHT * 2.5),
         width,
         margin: COMBINED_MARGIN,
@@ -1334,9 +1405,9 @@
         invertY: true,
         yFmt: (v) => v + "m",
         bands: depthBands(),
-        peaks: [maxDepthPeak, endGf99Marker, showMod && overLimitPeak, ...tempPeaks(tempScale)].filter(Boolean),
+        peaks: [...depthPeaks(), ...ppo2Peaks(ppo2Scale), ...tempPeaks(tempScale)],
         series,
-        refLines: showMod ? [ppo2LimitLine(ppo2Scale)] : [],
+        refLines: ppo2RefLines(ppo2Scale),
         dividers: [0.25, 0.75, 0.875],
         rightAxes: [
           { ...pressureScale, ticks: 4, fmt: (v) => Math.round(v) + " bar" },
@@ -1349,8 +1420,13 @@
       });
 
       drawXAxis(width, xDomain, COMBINED_MARGIN);
-      drawToggles([ceilingToggle(), gasSwitchToggle(), modToggle()].filter(Boolean));
-      setupCrosshair(samples, width, xDomain, shownSwitches(), COLORS, tankLabels, showMod, showCeiling);
+      // Three columns: depth, tanks, then PPO2 over temperature.
+      drawToggleGrid([
+        [{ title: "Depth", toggles: depthToggles() }],
+        tanksInUse.length && [{ title: "Tanks", toggles: tankToggles() }],
+        [{ title: "PPO2", toggles: ppo2Toggles() }, { title: "Temperature", toggles: tempToggles(true) }],
+      ].filter(Boolean));
+      setupCrosshair(samples, width, xDomain, shownSwitches(), COLORS, tankLabels, vis);
     }
 
     function renderCharts() {
