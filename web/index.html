@@ -1132,7 +1132,7 @@
     // is per tank slot. Switches the computer recorded (a change of logged mix)
     // always show; switches inferred from pressure only with `inferredSwitches`.
     const vis = {
-      depth: true, ceiling: true, mod: true, maxDepth: true, surfGf: true,
+      depth: true, ceiling: true, mod: true, depthHighlight: true, maxDepth: true, surfGf: true,
       tanks: [true, true, true, true], inferredSwitches: true,
       ppo2: true, highlight: true,
       temp: true, startTemp: true, minTemp: true,
@@ -1231,8 +1231,10 @@
       points: samples.map((s) => ({ t: s.t, v: s.ppo2 > MOD_PPO2 ? s.depth : null })),
     };
     const depthBands = () => [vis.ceiling && decoBand, vis.mod && modBand].filter(Boolean);
-    // The red breaches on the depth profile go with the limit they cross.
-    const limitOverlays = () => [vis.mod && overLimitSeries, vis.ceiling && overCeilingSeries].filter(Boolean);
+    // The red breaches on the depth profile, each shown with the limit it crosses.
+    const limitOverlays = () => (vis.depthHighlight
+      ? [vis.mod && overLimitSeries, vis.ceiling && overCeilingSeries].filter(Boolean)
+      : []);
     // PPO2 over the limit, drawn in red over the PPO2 line, reaching to its
     // neighbouring samples like the depth breaches do.
     const overPpo2 = samples.map((s) => s.ppo2 > MOD_PPO2);
@@ -1287,6 +1289,7 @@
       visToggle("Depth", "depth", { swatch: { color: COLORS.depth } }),
       visToggle("Show deco ceiling (CEIL)", "ceiling", { swatch: LIMIT_SWATCH }),
       visToggle("Show maximum operating depth (MOD)", "mod", { swatch: LIMIT_SWATCH }),
+      visToggle("Highlight exceeding limits", "depthHighlight", { disabled: !vis.depth || !(vis.ceiling || vis.mod) }),
       visToggle("Show maximum depth", "maxDepth", { disabled: !vis.depth }),
       visToggle("Show surface gradient factor (SurfGF)", "surfGf", { disabled: !vis.depth }),
     ];
