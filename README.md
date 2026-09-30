@@ -45,6 +45,19 @@ records, which `parse_dive.py` decodes. Its decoding was checked field by field
 against Shearwater Cloud's CSV export. The CSV, UDDF, XML and ZXU exports are
 not needed.
 
+## Deploying
+
+The viewer is hosted on the divelog container (`http://192.168.200.124/`).
+To parse the newest export and publish it in one step:
+
+```bash
+scripts/deploy.sh
+```
+
+Only `web/` and `data/` are sent; `raw/` stays local. Run
+`scripts/deploy.sh --help` for options (parse a specific export, skip the
+parser, or preview with `--dry-run`).
+
 ## Notes
 
 - Tank pressures are stored and displayed in bar (converted from the psi values
