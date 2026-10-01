@@ -1123,16 +1123,22 @@
       timeRow.className = "t-time";
       timeRow.textContent = fmtTime(s.t) + " elapsed";
       tooltip.appendChild(timeRow);
+      const modM = vis.mod && s.fractionO2 ? modDepthM(s.fractionO2) : null;
       const rowsData = [
         ...(vis.depth ? [["Depth", s.depth, "m", colors.depth]] : []),
-        ...(vis.ceiling ? [[
-          `Ceiling${s.firstStopDepth > 0 && s.depth < s.firstStopDepth ? " — exceeded" : ""}`,
-          s.firstStopDepth, "m", "var(--status-critical)",
-        ]] : []),
-        // In deco the NDL is 0, so show the next stop in its place.
-        s.firstStopDepth > 0
+        // Once the NDL runs out, show the next stop in its place.
+        s.ndlMin === 0 && s.firstStopDepth > 0
           ? ["Deco", `${s.firstStopTimeMin} min @ ${s.firstStopDepth}`, "m", "var(--text-muted)"]
           : ["NDL", s.ndlMin, "min", "var(--text-muted)"],
+        // Ceiling and MOD together, as the shallow and deep limits.
+        ...(vis.ceiling && s.firstStopDepth > 0 ? [[
+          `Ceiling${s.depth < s.firstStopDepth ? " — exceeded" : ""}`,
+          s.firstStopDepth, "m", "var(--status-critical)",
+        ]] : []),
+        ...(modM !== null ? [[
+          `MOD (${sampleMixName(s)})${s.ppo2 > MOD_PPO2 ? " — exceeded" : ""}`,
+          modM.toFixed(1), "m", "var(--status-critical)",
+        ]] : []),
         ...(vis.ppo2 ? [["PPO2", s.ppo2, "atm", colors.ppo2]] : []),
         ...(vis.ascent && ascentRates[idx] !== null ? [[
           ascentRates[idx] < 0 ? "Descent rate" : "Ascent rate",
@@ -1141,12 +1147,6 @@
         ...(vis.temp ? [["Temp", s.waterTempC, "°C", colors.temp]] : []),
         ...s.tankPressureBar.map((v, i) => [tankLabels[i].full, vis.tanks[i] ? v : null, "bar", colors.tanks[i]]),
       ];
-      if (vis.mod && s.fractionO2) {
-        const mod = modDepthM(s.fractionO2);
-        const over = s.ppo2 > MOD_PPO2;
-        // Just after the PPO2 row (or NDL/Deco, with PPO2 hidden).
-        rowsData.splice(rowsData.findIndex((r) => vis.ppo2 ? r[0] === "PPO2" : r[0] === "NDL" || r[0] === "Deco") + 1, 0, [`MOD (${sampleMixName(s)})${over ? " — exceeded" : ""}`, mod.toFixed(1), "m", "var(--status-critical)"]);
-      }
       rowsData.forEach(([name, val, unit, color]) => {
         if (val === null || val === undefined) return;
         const row = document.createElement("div");
