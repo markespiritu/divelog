@@ -691,6 +691,22 @@
     const seriesScales = series.map(scaleFor);
     series.forEach((s, si) => {
       const sScale = seriesScales[si];
+      // Bars run from zero to each value, each spanning halfway to its
+      // neighbouring samples, drawn as a single path.
+      if (s.bars) {
+        const pts = s.points;
+        const y0 = sScale(0);
+        let d = "";
+        pts.forEach((p, i) => {
+          if (p.v === null || p.v === undefined) return;
+          const x = xScale(p.t);
+          const left = i > 0 ? (x + xScale(pts[i - 1].t)) / 2 : x;
+          const right = i < pts.length - 1 ? (x + xScale(pts[i + 1].t)) / 2 : x;
+          d += `M${left},${y0} H${right} V${sScale(p.v)} H${left} Z `;
+        });
+        svg.appendChild(svgEl("path", { d, fill: s.color, stroke: "none" }));
+        return;
+      }
       let d = "";
       let penDown = false;
       s.points.forEach((p) => {
@@ -1474,7 +1490,7 @@
       return [-down, up];
     }
     const ascentSeries = (scale) => (vis.ascent ? [{
-      name: "Ascent rate", color: COLORS.ascent, points: samples.map((s, i) => ({ t: s.t, v: ascentRates()[i] })), ...scale,
+      name: "Ascent rate", color: COLORS.ascent, bars: true, points: samples.map((s, i) => ({ t: s.t, v: ascentRates()[i] })), ...scale,
     }] : []);
     // The fastest ascent, labelled to the left of its point.
     function ascentPeaks(scale) {
