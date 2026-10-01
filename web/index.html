@@ -153,13 +153,14 @@
   }
   .view-switch button + button, .zoom-buttons button + button { border-left: 1px solid var(--border); }
   /* Zoom and pan; moved into the chart stack while a chart is maximized. */
-  .zoom-bar { position: relative; z-index: 2; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+  .zoom-bar { position: relative; z-index: 2; display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-left: auto; }
   #chart-stack > .zoom-bar { margin-bottom: 8px; }
   .zoom-buttons button { padding: 6px 10px; line-height: 0; }
   .zoom-buttons svg { overflow: visible; }
   .zoom-bar .zoom-reset { border: 1px solid var(--border); border-radius: 8px; background: var(--surface-1); }
   .zoom-bar button:not(:disabled):hover { color: var(--text-primary); }
   .zoom-bar button:disabled { opacity: 0.4; cursor: default; }
+  .zoom-range:empty { display: none; }
   .zoom-range { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
   .view-switch button[aria-pressed="true"] { background: var(--seq-100); color: var(--text-primary); }
   .band-divider { stroke: var(--baseline); stroke-width: 1; stroke-dasharray: 4 4; }
@@ -263,7 +264,12 @@
   <div id="status"></div>
   <div class="stats" id="stats"></div>
   <div class="chart-toolbar">
+    <div class="view-switch" id="view-switch" role="group" aria-label="Chart layout">
+      <button type="button" data-view="combined">Combined</button>
+      <button type="button" data-view="separate">Separate</button>
+    </div>
     <div class="zoom-bar" id="zoom-bar" role="toolbar" aria-label="Chart zoom">
+      <span class="zoom-range" id="zoom-range" aria-live="polite"></span>
       <div class="zoom-buttons">
         <button type="button" data-zoom="left" aria-label="Pan earlier" title="Pan earlier (←)"><svg width="12" height="12" viewBox="0 0 10 10" aria-hidden="true"><path d="M6.5 1.5L3 5l3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         <button type="button" data-zoom="out" aria-label="Zoom out" title="Zoom out (−)"><svg width="12" height="12" viewBox="0 0 10 10" aria-hidden="true"><path d="M1.5 5h7" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
@@ -271,11 +277,6 @@
         <button type="button" data-zoom="right" aria-label="Pan later" title="Pan later (→)"><svg width="12" height="12" viewBox="0 0 10 10" aria-hidden="true"><path d="M3.5 1.5L7 5 3.5 8.5" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       </div>
       <button type="button" class="zoom-reset" data-zoom="reset" title="Show the whole dive (0)">Reset zoom</button>
-      <span class="zoom-range" id="zoom-range" aria-live="polite"></span>
-    </div>
-    <div class="view-switch" id="view-switch" role="group" aria-label="Chart layout">
-      <button type="button" data-view="combined">Combined</button>
-      <button type="button" data-view="separate">Separate</button>
     </div>
   </div>
   <div id="chart-stack"></div>
@@ -1532,9 +1533,7 @@
         const next = [...zoomBar.querySelectorAll("[data-zoom]")].find((btn) => !btn.disabled);
         if (next) next.focus({ preventScroll: true });
       }
-      zoomRange.textContent = zoom
-        ? `Showing ${fmtTime(a)} – ${fmtTime(b)} of ${fmtTime(xDomain[1])}`
-        : "Drag across the chart to zoom";
+      zoomRange.textContent = zoom ? `Showing ${fmtTime(a)} – ${fmtTime(b)} of ${fmtTime(xDomain[1])}` : "";
     }
     zoomBar.addEventListener("click", (evt) => {
       const action = zoomActions[evt.target.closest("[data-zoom]")?.dataset.zoom];
@@ -1935,7 +1934,7 @@
         panels.length = 0;
         // Out of view under a maximized chart, so the zoom bar goes above it.
         if (maximized) stackEl.appendChild(zoomBar);
-        else if (zoomBar.parentNode !== toolbarEl) toolbarEl.prepend(zoomBar);
+        else if (zoomBar.parentNode !== toolbarEl) toolbarEl.append(zoomBar);
         const width = maximized
           ? stackEl.clientWidth - 32
           : Math.min(1048, stackEl.clientWidth || root.clientWidth || 1048);
