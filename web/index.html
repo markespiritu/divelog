@@ -1129,7 +1129,10 @@
           `Ceiling${s.firstStopDepth > 0 && s.depth < s.firstStopDepth ? " — exceeded" : ""}`,
           s.firstStopDepth, "m", "var(--status-critical)",
         ]] : []),
-        ["NDL", s.ndlMin, "min", "var(--text-muted)"],
+        // In deco the NDL is 0, so show the next stop in its place.
+        s.firstStopDepth > 0
+          ? ["Deco", `${s.firstStopTimeMin} min @ ${s.firstStopDepth}`, "m", "var(--text-muted)"]
+          : ["NDL", s.ndlMin, "min", "var(--text-muted)"],
         ...(vis.ppo2 ? [["PPO2", s.ppo2, "atm", colors.ppo2]] : []),
         ...(vis.ascent && ascentRates[idx] !== null ? [[
           ascentRates[idx] < 0 ? "Descent rate" : "Ascent rate",
@@ -1141,8 +1144,8 @@
       if (vis.mod && s.fractionO2) {
         const mod = modDepthM(s.fractionO2);
         const over = s.ppo2 > MOD_PPO2;
-        // Just after the PPO2 row (or NDL, with PPO2 hidden).
-        rowsData.splice(rowsData.findIndex((r) => r[0] === (vis.ppo2 ? "PPO2" : "NDL")) + 1, 0, [`MOD (${sampleMixName(s)})${over ? " — exceeded" : ""}`, mod.toFixed(1), "m", "var(--status-critical)"]);
+        // Just after the PPO2 row (or NDL/Deco, with PPO2 hidden).
+        rowsData.splice(rowsData.findIndex((r) => vis.ppo2 ? r[0] === "PPO2" : r[0] === "NDL" || r[0] === "Deco") + 1, 0, [`MOD (${sampleMixName(s)})${over ? " — exceeded" : ""}`, mod.toFixed(1), "m", "var(--status-critical)"]);
       }
       rowsData.forEach(([name, val, unit, color]) => {
         if (val === null || val === undefined) return;
