@@ -1130,6 +1130,7 @@
         s.ndlMin === 0 && s.firstStopDepth > 0
           ? ["Deco", `${s.firstStopTimeMin} min @ ${s.firstStopDepth}`, "m", "var(--text-muted)"]
           : ["NDL", s.ndlMin, "min", "var(--text-muted)"],
+        ["TTS", s.timeToSurfaceMin, "min", "var(--text-muted)"],
         // Ceiling and MOD together, as the shallow and deep limits.
         ...(vis.ceiling && s.firstStopDepth > 0 ? [[
           `Ceiling${s.depth < s.firstStopDepth ? " — exceeded" : ""}`,
