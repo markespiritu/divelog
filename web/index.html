@@ -142,16 +142,26 @@
   .panel-toggle .swatch { width: 14px; height: 2px; border-radius: 2px; flex: none; }
   .gas-switch-tag { fill: var(--text-secondary); font-size: 9px; }
 
-  .chart-toolbar { display: flex; justify-content: flex-end; margin-bottom: 8px; }
-  .view-switch {
+  .chart-toolbar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+  .view-switch, .zoom-buttons {
     display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
     background: var(--surface-1);
   }
-  .view-switch button {
+  .view-switch button, .zoom-bar button {
     border: none; background: none; color: var(--text-secondary); font-size: 13px;
     padding: 6px 12px; cursor: pointer;
   }
-  .view-switch button + button { border-left: 1px solid var(--border); }
+  .view-switch button + button, .zoom-buttons button + button { border-left: 1px solid var(--border); }
+  /* Zoom and pan; moved into the chart stack while a chart is maximized. */
+  .zoom-bar { position: relative; z-index: 2; display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+  #chart-stack > .zoom-bar { margin-bottom: 8px; }
+  .zoom-buttons button { padding: 6px 10px; line-height: 0; }
+  .zoom-buttons svg { overflow: visible; }
+  .zoom-bar .zoom-reset { border: 1px solid var(--border); border-radius: 8px; background: var(--surface-1); }
+  .zoom-bar button:not(:disabled):hover { color: var(--text-primary); }
+  .zoom-bar button:disabled { opacity: 0.4; cursor: default; }
+  .zoom-range:empty { display: none; }
+  .zoom-range { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
   .view-switch button[aria-pressed="true"] { background: var(--seq-100); color: var(--text-primary); }
   .band-divider { stroke: var(--baseline); stroke-width: 1; stroke-dasharray: 4 4; }
 
@@ -168,6 +178,12 @@
   }
 
   #chart-stack { position: relative; }
+  /* Over the plots, under the toggles; horizontal drags select, vertical ones scroll. */
+  .crosshair-capture { position: absolute; z-index: 1; cursor: crosshair; touch-action: pan-y; user-select: none; }
+  .zoom-selection {
+    position: absolute; z-index: 1; pointer-events: none; visibility: hidden;
+    background: var(--series-1); opacity: 0.12; border-left: 1px solid; border-right: 1px solid;
+  }
   /* One chart filling the window; renderCharts sizes it to fit. */
   #chart-stack.maximized {
     position: fixed; inset: 0; z-index: 20; overflow: auto;
@@ -251,6 +267,16 @@
     <div class="view-switch" id="view-switch" role="group" aria-label="Chart layout">
       <button type="button" data-view="combined">Combined</button>
       <button type="button" data-view="separate">Separate</button>
+    </div>
+    <div class="zoom-bar" id="zoom-bar" role="toolbar" aria-label="Chart zoom">
+      <span class="zoom-range" id="zoom-range" aria-live="polite"></span>
+      <div class="zoom-buttons">
+        <button type="button" data-zoom="left" aria-label="Pan earlier" title="Pan earlier (←)"><svg width="12" height="12" viewBox="0 0 10 10" aria-hidden="true"><path d="M6.5 1.5L3 5l3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <button type="button" data-zoom="out" aria-label="Zoom out" title="Zoom out (−)"><svg width="12" height="12" viewBox="0 0 10 10" aria-hidden="true"><path d="M1.5 5h7" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <button type="button" data-zoom="in" aria-label="Zoom in" title="Zoom in (+)"><svg width="12" height="12" viewBox="0 0 10 10" aria-hidden="true"><path d="M1.5 5h7M5 1.5v7" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <button type="button" data-zoom="right" aria-label="Pan later" title="Pan later (→)"><svg width="12" height="12" viewBox="0 0 10 10" aria-hidden="true"><path d="M3.5 1.5L7 5 3.5 8.5" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      </div>
+      <button type="button" class="zoom-reset" data-zoom="reset" title="Show the whole dive (0)">Reset zoom</button>
     </div>
   </div>
   <div id="chart-stack"></div>
@@ -339,6 +365,17 @@
     const start = Math.ceil(min / step) * step;
     const ticks = [];
     for (let v = start; v <= max + 1e-9; v += step) ticks.push(Math.round(v * 1000) / 1000);
+    return ticks;
+  }
+
+  // Elapsed-time ticks on whole steps of the clock (10 s, 30 s, 1 min, 5 min, …),
+  // about `count` across, so a zoomed-in axis still reads 12:30, 13:00, …
+  const TIME_STEPS = [5, 10, 15, 30, 60, 120, 300, 600, 900, 1200, 1800, 3600];
+  function timeTicks(min, max, count) {
+    const rawStep = (max - min || 1) / count;
+    const step = TIME_STEPS.find((s) => s >= rawStep) || TIME_STEPS[TIME_STEPS.length - 1];
+    const ticks = [];
+    for (let v = Math.ceil(min / step) * step; v <= max + 1e-9; v += step) ticks.push(v);
     return ticks;
   }
 
@@ -579,6 +616,8 @@
 
   // Panel registry so the shared crosshair can update every chart at once.
   const panels = [];
+  // Gives each panel's clip path a unique id.
+  let clipCount = 0;
 
   // Series, point labels and right-hand axes may each claim a horizontal
   // slice of the plot (`band`: [top, bottom] as fractions of the plot height)
@@ -650,13 +689,25 @@
       });
     });
 
+    // Bands, reference lines, series and markers are clipped to the plot's
+    // width, so a zoomed-in chart doesn't spill over its axes.
+    const clipId = `plot-clip-${++clipCount}`;
+    const defs = svgEl("defs", {});
+    const clipPath = svgEl("clipPath", { id: clipId });
+    clipPath.appendChild(svgEl("rect", { x: MARGIN.left, y: -h, width: Math.max(0, innerW), height: 3 * h }));
+    defs.appendChild(clipPath);
+    svg.appendChild(defs);
+    const plot = svgEl("g", { "clip-path": `url(#${clipId})` });
+    svg.appendChild(plot);
+    const inView = (t) => t >= xDomain[0] && t <= xDomain[1];
+
     // shaded bands (e.g. deco ceiling zone, MOD floor)
     (bands || []).forEach((b) => {
       const path = b.points.map((p, i) => `${i === 0 ? "M" : "L"}${xScale(p.t)},${yScale(p.v)}`).join(" ");
       const baseY = yScale(b.base);
       const first = b.points[0], last = b.points[b.points.length - 1];
       const d = `${path} L${xScale(last.t)},${baseY} L${xScale(first.t)},${baseY} Z`;
-      svg.appendChild(svgEl("path", { d, fill: b.color, opacity: b.opacity || 0.18, stroke: "none" }));
+      plot.appendChild(svgEl("path", { d, fill: b.color, opacity: b.opacity || 0.18, stroke: "none" }));
       // Optional dashed edge along the band's free side, lifted wherever the band has no height.
       if (b.outline) {
         let edge = "", penDown = false;
@@ -665,7 +716,7 @@
           edge += `${penDown ? "L" : "M"}${xScale(p.t)},${yScale(p.v)} `;
           penDown = true;
         });
-        svg.appendChild(svgEl("path", {
+        plot.appendChild(svgEl("path", {
           d: edge, fill: "none", stroke: b.color, "stroke-width": 1, "stroke-dasharray": "4 3", opacity: 0.8,
         }));
       }
@@ -674,7 +725,7 @@
     // horizontal reference lines (e.g. the PPO2 limit), optionally on a banded scale
     (refLines || []).forEach((r) => {
       const y = scaleFor(r.scale)(r.v);
-      svg.appendChild(svgEl("line", {
+      plot.appendChild(svgEl("line", {
         x1: MARGIN.left, x2: w - MARGIN.right, y1: y, y2: y,
         stroke: r.color, "stroke-width": 1, "stroke-dasharray": "4 3", opacity: 0.8,
       }));
@@ -683,7 +734,7 @@
           class: "point-label", fill: r.color, x: w - MARGIN.right - 4, y: y - 3, "text-anchor": "end",
         });
         label.textContent = r.text;
-        svg.appendChild(label);
+        plot.appendChild(label);
       }
     });
 
@@ -704,7 +755,7 @@
           const right = i < pts.length - 1 ? (x + xScale(pts[i + 1].t)) / 2 : x;
           d += `M${left},${y0} H${right} V${sScale(p.v)} H${left} Z `;
         });
-        svg.appendChild(svgEl("path", { d, fill: s.color, stroke: "none" }));
+        plot.appendChild(svgEl("path", { d, fill: s.color, stroke: "none" }));
         return;
       }
       let d = "";
@@ -715,31 +766,34 @@
         d += (penDown ? "L" : "M") + x + "," + y + " ";
         penDown = true;
       });
-      svg.appendChild(svgEl("path", {
+      plot.appendChild(svgEl("path", {
         d, fill: "none", stroke: s.color, "stroke-width": s.width || 2,
         "stroke-linejoin": "round", "stroke-linecap": "round",
         "stroke-dasharray": s.dashed ? "4 3" : null,
       }));
     });
 
-    // gas switch markers (or similar point-in-time indicators)
-    (markers || []).forEach((m) => {
+    // gas switch markers (or similar point-in-time indicators), only those in view
+    const shownMarkers = (markers || []).filter((m) => inView(m.t));
+    shownMarkers.forEach((m) => {
       const x = xScale(m.t);
-      svg.appendChild(svgEl("line", {
+      plot.appendChild(svgEl("line", {
         x1: x, x2: x, y1: MARGIN.top, y2: MARGIN.top + innerH,
         stroke: "var(--text-secondary)", "stroke-width": 1, "stroke-dasharray": "3 3", opacity: 0.6,
       }));
-      svg.appendChild(svgEl("path", {
+      plot.appendChild(svgEl("path", {
         d: `M${x - 4},${MARGIN.top} L${x + 4},${MARGIN.top} L${x},${MARGIN.top + 7} Z`,
         fill: "var(--text-secondary)", opacity: 0.85,
       }));
     });
 
-    if (pointLabels && pointLabels.length) {
+    // Labels and peaks are drawn only for points in view.
+    const shownLabels = (pointLabels || []).filter((l) => inView(l.t));
+    if (shownLabels.length) {
       // Gas switch triangles at the top of the plot are obstacles for labels.
-      const obstacles = (markers || []).map((m) => ({ x: xScale(m.t) - 4, y: MARGIN.top, w: 8, h: 7 }));
+      const obstacles = shownMarkers.map((m) => ({ x: xScale(m.t) - 4, y: MARGIN.top, w: 8, h: 7 }));
       const band = (pointLabelScale && pointLabelScale.band) || [0, 1];
-      drawPointLabels(svg, pointLabels, {
+      drawPointLabels(svg, shownLabels, {
         xScale, yScale: scaleFor(pointLabelScale), top: bandTop(band[0]), bottom: bandTop(band[1]), obstacles,
       });
     }
@@ -748,7 +802,7 @@
     // its value labelled just below (or `above`), centred or to the right, or
     // level with it on the left (`beside`), kept inside the plot horizontally.
     // `scale` places it on a banded scale.
-    (peaks || []).forEach((peak) => {
+    (peaks || []).filter((peak) => inView(peak.t)).forEach((peak) => {
       const px = xScale(peak.t), py = scaleFor(peak.scale)(peak.v);
       svg.appendChild(svgEl("circle", {
         cx: px, cy: py, r: 3.5, fill: peak.color, stroke: "var(--surface-1)", "stroke-width": 1.5,
@@ -820,7 +874,7 @@
       style: `width:100%; height:${h}px; display:block;`,
     });
     const xScale = makeScale(xDomain, [MARGIN.left, width - MARGIN.right]);
-    const ticks = niceTicks(xDomain[0], xDomain[1], 8);
+    const ticks = timeTicks(xDomain[0], xDomain[1], 8);
     ticks.forEach((tv) => {
       const x = xScale(tv);
       const label = svgEl("text", { x, y: 12, class: "axis-label", "text-anchor": "middle" });
@@ -973,7 +1027,8 @@
 
   // `vis` is the display toggles: the tooltip leaves out whatever is switched off.
   // `ascentRates` is the smoothed ascent rate per sample (m/min, ascending positive).
-  function setupCrosshair(samples, width, xDomain, gasSwitchEvents, colors, tankLabels, vis, ascentRates) {
+  // Dragging across the charts selects a period, passed to `onSelect` as [t0, t1].
+  function setupCrosshair(samples, width, xDomain, gasSwitchEvents, colors, tankLabels, vis, ascentRates, onSelect) {
     const MARGIN = panels[0].margin;
     const overlay = svgEl("svg", { width, height: 2, style: "position:absolute; top:0; left:0; pointer-events:none;" });
     // Use a transparent full-height div for pointer capture instead of svg overlay,
@@ -990,14 +1045,31 @@
     const plotWidth = panels[0].innerW * scaleX;
 
     const capture = document.createElement("div");
-    capture.style.position = "absolute";
     capture.style.top = "0";
     capture.style.left = plotLeft + "px";
     capture.style.width = plotWidth + "px";
     capture.style.height = stackEl.scrollHeight + "px";
-    capture.style.cursor = "crosshair";
-    capture.style.zIndex = "1";
+    capture.className = "crosshair-capture";
     stackEl.appendChild(capture);
+
+    // The selection being dragged out, shaded from the top of the first chart
+    // to the bottom of the last.
+    const selection = document.createElement("div");
+    selection.className = "zoom-selection";
+    const firstRect = panels[0].svg.getBoundingClientRect();
+    const lastRect = panels[panels.length - 1].svg.getBoundingClientRect();
+    selection.style.top = firstRect.top - stackRect.top + stackEl.scrollTop + "px";
+    selection.style.height = lastRect.bottom - firstRect.top + "px";
+    stackEl.appendChild(selection);
+    // clientX where the button went down, while it's held.
+    let dragFrom = null;
+    const DRAG_MIN_PX = 4;
+    const dragging = (evt) => dragFrom !== null && Math.abs(evt.clientX - dragFrom) >= DRAG_MIN_PX;
+    function timeAt(clientX) {
+      const rect = capture.getBoundingClientRect();
+      const frac = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+      return frac * (xDomain[1] - xDomain[0]) + xDomain[0];
+    }
 
     const xScale = panels[0].xScale;
 
@@ -1011,9 +1083,7 @@
     }
 
     function move(evt) {
-      const rect = capture.getBoundingClientRect();
-      const frac = (evt.clientX - rect.left) / rect.width;
-      const t = frac * (xDomain[1] - xDomain[0]) + xDomain[0];
+      const t = timeAt(evt.clientX);
       const idx = Math.max(0, Math.min(samples.length - 1, nearestIndex(t)));
       const s = samples[idx];
       const x = xScale(s.t);
@@ -1032,8 +1102,23 @@
         });
       });
 
-      // tooltip content
+      // tooltip content: the period being selected, or the readings here
       tooltip.innerHTML = "";
+      if (dragging(evt)) {
+        const rect = capture.getBoundingClientRect();
+        const a = Math.max(0, Math.min(rect.width, dragFrom - rect.left));
+        const b = Math.max(0, Math.min(rect.width, evt.clientX - rect.left));
+        selection.style.left = capture.offsetLeft + Math.min(a, b) + "px";
+        selection.style.width = Math.abs(b - a) + "px";
+        selection.style.visibility = "visible";
+        const [t0, t1] = [timeAt(dragFrom), t].sort((x, y) => x - y);
+        const row = document.createElement("div");
+        row.className = "t-time";
+        row.textContent = `Zoom to ${fmtTime(t0)} – ${fmtTime(t1)}`;
+        tooltip.appendChild(row);
+        placeTooltip(evt);
+        return;
+      }
       const timeRow = document.createElement("div");
       timeRow.className = "t-time";
       timeRow.textContent = fmtTime(s.t) + " elapsed";
@@ -1091,7 +1176,11 @@
         tooltip.appendChild(row);
       }
 
-      // The tooltip lives in the stack (see renderCharts), so place it from there.
+      placeTooltip(evt);
+    }
+
+    // The tooltip lives in the stack (see renderCharts), so place it from there.
+    function placeTooltip(evt) {
       const stackRect = stackEl.getBoundingClientRect();
       const px = evt.clientX - stackRect.left + stackEl.scrollLeft;
       let left = px + 12;
@@ -1103,8 +1192,25 @@
       tooltip.style.opacity = "1";
     }
 
-    capture.addEventListener("mousemove", move);
-    capture.addEventListener("mouseleave", () => {
+    function endDrag() {
+      dragFrom = null;
+      selection.style.visibility = "hidden";
+    }
+    capture.addEventListener("pointerdown", (evt) => {
+      if (evt.button !== 0) return;
+      dragFrom = evt.clientX;
+      // Keeps the drag going when the pointer strays off the chart.
+      capture.setPointerCapture(evt.pointerId);
+      evt.preventDefault();
+    });
+    capture.addEventListener("pointerup", (evt) => {
+      const selected = dragging(evt) && [timeAt(dragFrom), timeAt(evt.clientX)].sort((x, y) => x - y);
+      endDrag();
+      if (selected) onSelect(selected);
+    });
+    capture.addEventListener("pointercancel", endDrag);
+    capture.addEventListener("pointermove", move);
+    capture.addEventListener("pointerleave", () => {
       tooltip.style.opacity = "0";
       panels.forEach((p) => {
         p.crosshair.setAttribute("visibility", "hidden");
@@ -1378,6 +1484,73 @@
       if (evt.key === "Escape" && maximized) setMaximized(null);
     });
 
+    // The period shown, as [t0, t1] seconds, or null for the whole dive. Set
+    // by dragging across the charts or with the zoom bar; not remembered
+    // across visits.
+    const toolbarEl = document.querySelector(".chart-toolbar");
+    const zoomBar = document.getElementById("zoom-bar");
+    const zoomRange = document.getElementById("zoom-range");
+    const MIN_ZOOM_SPAN = 30;
+    const fullSpan = xDomain[1] - xDomain[0];
+    let zoom = null;
+    // Clamped to the dive, at least MIN_ZOOM_SPAN wide (grown about its
+    // middle), and null once it covers the whole dive.
+    function setZoom(range) {
+      if (range) {
+        const span = Math.min(fullSpan, Math.max(MIN_ZOOM_SPAN, range[1] - range[0]));
+        const start = Math.max(xDomain[0], Math.min(xDomain[1] - span, (range[0] + range[1] - span) / 2));
+        range = span >= fullSpan - 1e-6 ? null : [start, start + span];
+      }
+      zoom = range;
+      syncZoomBar();
+      renderCharts();
+    }
+    function zoomBy(factor) {
+      const [a, b] = zoom || xDomain;
+      const mid = (a + b) / 2, half = ((b - a) * factor) / 2;
+      setZoom([mid - half, mid + half]);
+    }
+    // By a fraction of the period shown, later for positive `frac`.
+    function panBy(frac) {
+      if (!zoom) return;
+      const step = (zoom[1] - zoom[0]) * frac;
+      setZoom([zoom[0] + step, zoom[1] + step]);
+    }
+    const zoomActions = {
+      in: () => zoomBy(0.5), out: () => zoomBy(2), reset: () => setZoom(null),
+      left: () => panBy(-0.5), right: () => panBy(0.5),
+    };
+    function syncZoomBar() {
+      const [a, b] = zoom || xDomain;
+      const disabled = {
+        in: b - a <= MIN_ZOOM_SPAN + 1e-6, out: !zoom, reset: !zoom,
+        left: !zoom || a <= xDomain[0], right: !zoom || b >= xDomain[1],
+      };
+      const focused = zoomBar.contains(document.activeElement) && document.activeElement;
+      zoomBar.querySelectorAll("[data-zoom]").forEach((btn) => { btn.disabled = disabled[btn.dataset.zoom]; });
+      // A button disabled under the keyboard hands focus to one that still works.
+      if (focused && focused.disabled) {
+        const next = [...zoomBar.querySelectorAll("[data-zoom]")].find((btn) => !btn.disabled);
+        if (next) next.focus({ preventScroll: true });
+      }
+      zoomRange.textContent = zoom ? `Showing ${fmtTime(a)} – ${fmtTime(b)} of ${fmtTime(xDomain[1])}` : "";
+    }
+    zoomBar.addEventListener("click", (evt) => {
+      const action = zoomActions[evt.target.closest("[data-zoom]")?.dataset.zoom];
+      if (action) action();
+    });
+    // + / - / 0 and the arrow keys, unless typing or using a toggle.
+    document.addEventListener("keydown", (evt) => {
+      if (evt.ctrlKey || evt.metaKey || evt.altKey) return;
+      if (evt.target.closest?.("input, select, textarea, [contenteditable]")) return;
+      const action = { "+": "in", "=": "in", "-": "out", "_": "out", "0": "reset",
+        ArrowLeft: zoom && "left", ArrowRight: zoom && "right" }[evt.key];
+      if (!action) return;
+      evt.preventDefault();
+      zoomActions[action]();
+    });
+    syncZoomBar();
+
     const DEPTH_HEIGHT = 264;
     const depthMax = Math.max(...samples.map((s) => s.depth || 0)) * 1.08;
     const maxPpo2 = Math.max(...samples.map((s) => s.ppo2 || 0));
@@ -1638,12 +1811,13 @@
         },
       ].filter(Boolean);
 
+      const shown = zoom || xDomain;
       panelSpecs.filter((p) => !maximized || p.id === maximized).forEach(({ id, height, ...spec }) => {
-        drawPanel({ ...spec, height: height + extra, width, xDomain, maximize: maximizeFor(id) }).dataset.panel = id;
+        drawPanel({ ...spec, height: height + extra, width, xDomain: shown, maximize: maximizeFor(id) }).dataset.panel = id;
       });
 
-      drawXAxis(width, xDomain);
-      setupCrosshair(samples, width, xDomain, shownSwitches(), COLORS, tankLabels, vis, ascentRates());
+      drawXAxis(width, shown);
+      setupCrosshair(samples, width, shown, shownSwitches(), COLORS, tankLabels, vis, ascentRates(), setZoom);
     }
 
     // One tall chart on the depth axis, which runs on past the deepest point
@@ -1683,6 +1857,7 @@
     }
     function renderCombined(width, extra) {
       const layout = combinedLayout(extra);
+      const shown = zoom || xDomain;
       const pressureScale = { domain: [0, tankMax], band: layout.pressure };
       const ppo2Scale = { domain: ppo2Domain, band: layout.ppo2 };
       const ascentScale = { domain: ascentDomain(), band: layout.ascent };
@@ -1707,7 +1882,7 @@
         height: layout.height,
         width,
         margin: COMBINED_MARGIN,
-        xDomain,
+        xDomain: shown,
         yDomain: [0, combinedDepthMax],
         invertY: true,
         yFmt: (v) => v + "m",
@@ -1727,7 +1902,7 @@
         pointLabelScale: pressureScale,
       }).dataset.panel = "combined";
 
-      drawXAxis(width, xDomain, COMBINED_MARGIN);
+      drawXAxis(width, shown, COMBINED_MARGIN);
       // A column per group where there's room; otherwise ascent rate goes
       // under PPO2, making four columns that wrap two to a row.
       const depthGroup = { title: "Depth", toggles: depthToggles() };
@@ -1739,7 +1914,7 @@
         [[depthGroup], tankGroup && [tankGroup], [ppo2Group], [ascentGroup], [tempGroup]].filter(Boolean),
         [[depthGroup], tankGroup && [tankGroup], [ppo2Group, ascentGroup], [tempGroup]].filter(Boolean),
       ]);
-      setupCrosshair(samples, width, xDomain, shownSwitches(), COLORS, tankLabels, vis, ascentRates());
+      setupCrosshair(samples, width, shown, shownSwitches(), COLORS, tankLabels, vis, ascentRates(), setZoom);
     }
 
     function renderCharts() {
@@ -1749,6 +1924,7 @@
       const scrollY = window.scrollY;
       const focused = stackEl.contains(document.activeElement) && document.activeElement.closest(".panel-toggle");
       const focusedId = focused && focused.dataset.toggle;
+      const focusedZoom = zoomBar.contains(document.activeElement) && document.activeElement.dataset.zoom;
       // A maximized chart is drawn at its normal size first, then again
       // resized by whatever room is left in the window: taller, or shorter to
       // keep its toggles in view, but no shorter than half the window (as on
@@ -1756,6 +1932,9 @@
       const draw = (extra) => {
         stackEl.innerHTML = "";
         panels.length = 0;
+        // Out of view under a maximized chart, so the zoom bar goes above it.
+        if (maximized) stackEl.appendChild(zoomBar);
+        else if (zoomBar.parentNode !== toolbarEl) toolbarEl.append(zoomBar);
         const width = maximized
           ? stackEl.clientWidth - 32
           : Math.min(1048, stackEl.clientWidth || root.clientWidth || 1048);
@@ -1783,6 +1962,10 @@
       if (focusedId) {
         const again = [...stackEl.querySelectorAll(".panel-toggle")].find((l) => l.dataset.toggle === focusedId);
         if (again) again.querySelector("input").focus({ preventScroll: true });
+      }
+      if (focusedZoom && !zoomBar.contains(document.activeElement)) {
+        const btn = zoomBar.querySelector(`[data-zoom="${focusedZoom}"]`);
+        if (btn && !btn.disabled) btn.focus({ preventScroll: true });
       }
     }
 
