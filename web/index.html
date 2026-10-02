@@ -1831,14 +1831,17 @@
     // tall as that stack needs. Hidden lines keep their slice and axis, so the
     // rest doesn't move.
     const combinedDepthMax = Math.ceil((deepest.depth + 5) / 10) * 10;
-    // Slice heights in px of plot area.
-    const COMBINED_SLICES = { pressure: 280, gap: 22, ppo2: 66, ascent: 77, temp: 85 };
+    // Relative slice heights, scaled to fit the chart's height.
+    const COMBINED_SLICES = { pressure: 228, gap: 18, ppo2: 53, ascent: 62, temp: 68 };
+    // The chart's height in px, title included (the title row is 50px).
+    const COMBINED_HEIGHT = 600;
     // The plot height follows from the slices, all linear in them, so
     // stretching every slice by the same factor makes the plot `extra` px taller.
     function combinedLayout(extra = 0) {
       const sliceSum = ({ pressure, gap, ppo2, ascent, temp }) =>
         (pressure * 200 / tankMax + 3 * gap + ppo2 + ascent + temp) / (1 - 10 / combinedDepthMax);
-      const k = Math.max(0.3, 1 + extra / sliceSum(COMBINED_SLICES));
+      const plotH = COMBINED_HEIGHT - 50 - COMBINED_MARGIN.top - COMBINED_MARGIN.bottom;
+      const k = Math.max(0.3 * plotH, plotH + extra) / sliceSum(COMBINED_SLICES);
       const { pressure, gap, ppo2, ascent, temp } = Object.fromEntries(
         Object.entries(COMBINED_SLICES).map(([key, px]) => [key, px * k]));
       const below200 = pressure * 200 / tankMax;
