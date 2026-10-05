@@ -265,8 +265,8 @@
   <div class="stats" id="stats"></div>
   <div class="chart-toolbar">
     <div class="view-switch" id="view-switch" role="group" aria-label="Chart layout">
-      <button type="button" data-view="combined">Combined</button>
       <button type="button" data-view="separate">Separate</button>
+      <button type="button" data-view="combined">Combined</button>
     </div>
     <div class="zoom-bar" id="zoom-bar" role="toolbar" aria-label="Chart zoom">
       <span class="zoom-range" id="zoom-range" aria-live="polite"></span>
@@ -1449,8 +1449,8 @@
     const shownSwitches = () => gasSwitchEvents.filter(isShownSwitch);
 
     const viewSwitch = document.getElementById("view-switch");
-    let chartView = "combined";
-    try { if (localStorage.getItem("divelog.chartView") === "separate") chartView = "separate"; } catch (e) {}
+    let chartView = "separate";
+    try { if (localStorage.getItem("divelog.chartView") === "combined") chartView = "combined"; } catch (e) {}
     function syncViewSwitch() {
       viewSwitch.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.view === chartView)));
     }
